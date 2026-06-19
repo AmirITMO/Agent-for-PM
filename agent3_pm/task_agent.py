@@ -65,7 +65,11 @@ backlog→planning, planning→todo, todo→wip, wip→done, done→approved
 
 «Отметь выполненной» = status: "done"
 
-4. УТОЧНИТЬ:
+4. УДАЛИТЬ задачу:
+{{"action": "delete_task", "task_id": число}}
+Только если пользователь явно попросил удалить.
+
+5. УТОЧНИТЬ:
 {{"action": "clarify", "message": "вопрос"}}
 
 ВАЖНО:

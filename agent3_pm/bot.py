@@ -55,14 +55,19 @@ def _menu_kb() -> ReplyKeyboardMarkup:
 
 
 def _positions_kb() -> InlineKeyboardMarkup:
-    rows, row = [], []
-    for i, pos in enumerate(POSITIONS):
-        row.append(InlineKeyboardButton(pos, callback_data=f"pos_{i}"))
-        if len(row) == 3:
+    from agent3_pm.models import POSITION_GROUPS
+    rows = []
+    for group_name, items in POSITION_GROUPS:
+        rows.append([InlineKeyboardButton(f"── {group_name} ──", callback_data="noop")])
+        row = []
+        for pos in items:
+            idx = POSITIONS.index(pos)
+            row.append(InlineKeyboardButton(pos, callback_data=f"pos_{idx}"))
+            if len(row) == 3:
+                rows.append(row)
+                row = []
+        if row:
             rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
     return InlineKeyboardMarkup(rows)
 
 
@@ -118,6 +123,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
+
+    if data == "noop":
+        await query.answer()
+        return
 
     if data == "register":
         await query.answer()
@@ -309,8 +318,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Quick menu buttons (no LLM needed)
         if text == "Мои задачи":
-            tasks = await get_tasks_for_user_today(session, user.id)
-            reply = format_today_tasks(tasks) + f"\n\n{_enter_url(user.id)}"
+            all_my = await get_all_tasks(session, assignee_id=user.id)
+            from agent3_pm.models import ACTIVE_STATUSES
+            active = [t for t in all_my if t.status in ACTIVE_STATUSES]
+            if not active:
+                reply = "У тебя нет активных задач."
+            else:
+                base = config.WEB_BASE_URL.rstrip("/")
+                lines = [f"<b>Твои задачи ({len(active)}):</b>\n"]
+                for t in active:
+                    p = t.project.name if t.project else "—"
+                    lines.append(f"{'[Баг] ' if t.is_bug else ''}P{t.priority} {t.title} ({p}) {base}/task/{t.id}")
+                reply = "\n".join(lines)
+            reply += f"\n\n{_enter_url(user.id)}"
             await _reply(update, reply, _menu_kb())
             return
 
@@ -486,6 +506,20 @@ async def _process_smart(update, context, text, session, user):
         await update_task(session, task.id, **changes)
         web = f"{config.WEB_BASE_URL.rstrip('/')}/task/{task.id}"
         await _reply(update, f"Обновлено: <b>{task.title}</b>\n{web}")
+
+    elif action == "delete_task":
+        task_id = result.get("task_id")
+        if task_id:
+            from agent3_pm.repository import get_task_by_id, delete_task as del_task
+            task = await get_task_by_id(session, task_id)
+            if task:
+                title = task.title
+                await del_task(session, task_id)
+                await _reply(update, f"Задача удалена: {title}")
+            else:
+                await _reply(update, "Задача не найдена.")
+        else:
+            await _reply(update, "Не удалось определить задачу для удаления.")
 
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):

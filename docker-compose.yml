@@ -1,34 +1,31 @@
 version: '3.8'
 
 services:
-  db:
+  agent3-db:
     image: postgres:16-alpine
+    container_name: agent3-db
     environment:
       POSTGRES_DB: agent3_pm
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: agent3secure2026
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - agent3_pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
 
-  agent3:
+  agent3-app:
     build: .
+    container_name: agent3-app
     depends_on:
-      - db
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/agent3_pm
-      DATABASE_URL_SYNC: postgresql://postgres:postgres@db:5432/agent3_pm
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost:8080}
-      ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-}
-      TIMEZONE: Europe/Moscow
-      MORNING_SUMMARY_HOUR: "9"
-      DEADLINE_CHECK_INTERVAL_MINUTES: "30"
-      DEADLINE_WARNING_HOURS: "24"
+      - agent3-db
+    env_file: .env
     ports:
-      - "8080:8080"
+      - "8083:8080"
+    volumes:
+      - agent3_uploads:/app/agent3_pm/uploads
     restart: unless-stopped
 
 volumes:
-  pgdata:
+  agent3_pgdata:
+  agent3_uploads:

@@ -358,6 +358,15 @@ async def mark_done_api(task_id: int, request: Request,
     return RedirectResponse(redirect, status_code=303)
 
 
+@app.post("/api/tasks/{task_id}/delete", response_class=RedirectResponse)
+async def delete_task_api(task_id: int, request: Request,
+                          session: AsyncSession = Depends(get_session)):
+    form = await request.form()
+    redirect = form.get("redirect", "/board")
+    await repo.delete_task(session, task_id)
+    return RedirectResponse(redirect, status_code=303)
+
+
 # ── Comments + attachments ──
 
 @app.post("/api/tasks/{task_id}/comment", response_class=RedirectResponse)

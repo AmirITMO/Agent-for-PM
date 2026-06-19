@@ -420,6 +420,15 @@ async def update_task(session: AsyncSession, task_id: int, **kwargs) -> Task | N
     return task
 
 
+async def delete_task(session: AsyncSession, task_id: int) -> bool:
+    task = await get_task_by_id(session, task_id)
+    if not task:
+        return False
+    await session.delete(task)
+    await session.commit()
+    return True
+
+
 async def update_task_status(session: AsyncSession, task_id: int, new_status: TaskStatus) -> Task | None:
     return await update_task(session, task_id, status=new_status)
 

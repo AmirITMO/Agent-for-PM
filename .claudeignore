@@ -10,6 +10,9 @@ build
 out
 target
 
+# pycache
+__pycache__
+
 # cache
 .cache
 .tmp

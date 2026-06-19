@@ -1,5 +1,4 @@
 import logging
-import datetime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -11,41 +10,76 @@ from agent3_pm.config import config
 from agent3_pm.database import AsyncSessionLocal
 from agent3_pm import repository as repo
 from agent3_pm.formatter import format_morning_summary, format_deadline_warning
+from agent3_pm.models import ACTIVE_STATUSES
 
 logger = logging.getLogger(__name__)
 
 
 async def send_morning_summary(bot: Bot):
-    logger.info("Sending morning summary")
+    """Send morning summary: full report to Level 1, personal to everyone."""
+    logger.info("Sending morning summaries")
     async with AsyncSessionLocal() as session:
+        all_users = await repo.get_all_users(session)
         managers = await repo.get_managers(session)
-        if not managers:
-            logger.warning("No managers found, skipping morning summary")
-            return
-
         summary = await repo.get_team_summary(session)
-        text = format_morning_summary(summary, config.WEB_BASE_URL)
+        base = config.WEB_BASE_URL.rstrip("/")
 
+        # Level 1 — full team summary
+        full_text = format_morning_summary(summary, base)
         for manager in managers:
             if not manager.telegram_id:
                 continue
             try:
-                await bot.send_message(
-                    chat_id=manager.telegram_id,
-                    text=text,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-                logger.info(f"Morning summary sent to {manager.name} ({manager.telegram_id})")
+                await bot.send_message(chat_id=manager.telegram_id, text=full_text,
+                                       parse_mode="HTML", disable_web_page_preview=True)
+                logger.info(f"Full summary sent to {manager.name}")
             except Exception:
-                logger.exception(f"Failed to send morning summary to {manager.name}")
+                logger.exception(f"Failed to send summary to {manager.name}")
+
+        # Everyone with telegram — personal report
+        for user in all_users:
+            if not user.telegram_id:
+                continue
+            my_tasks = await repo.get_all_tasks(session, assignee_id=user.id)
+            active = [t for t in my_tasks if t.status in ACTIVE_STATUSES]
+            if not active:
+                continue
+
+            overdue = await repo.get_overdue_tasks(session, user_id=user.id)
+            hot = await repo.get_hot_tasks(session, config.DEADLINE_WARNING_HOURS, user_id=user.id)
+
+            lines = [f"<b>Отчет по твоим задачам:</b>\n"]
+            if overdue:
+                lines.append(f"<b>Просрочки ({len(overdue)}):</b>")
+                for t in overdue:
+                    lines.append(f"  {t.title} — {t.due_date.strftime('%d.%m.%Y')} {base}/task/{t.id}")
+            else:
+                lines.append("Просрочки — нет")
+            lines.append("")
+            if hot:
+                lines.append(f"<b>Дедлайны скоро ({len(hot)}):</b>")
+                for t in hot:
+                    dd = t.due_date.strftime('%d.%m.%Y') if t.due_date else ""
+                    lines.append(f"  {t.title} — {dd} {base}/task/{t.id}")
+            else:
+                lines.append("Ближайших дедлайнов нет")
+
+            text = "\n".join(lines)
+            try:
+                await bot.send_message(chat_id=user.telegram_id, text=text,
+                                       parse_mode="HTML", disable_web_page_preview=True)
+                logger.info(f"Personal summary sent to {user.name}")
+            except Exception:
+                logger.exception(f"Failed to send personal summary to {user.name}")
 
 
 async def check_deadlines(bot: Bot):
+    """Check deadlines and notify assignees."""
     logger.info("Checking deadlines")
     async with AsyncSessionLocal() as session:
         hot_tasks = await repo.get_hot_tasks(session, config.DEADLINE_WARNING_HOURS)
         overdue_tasks = await repo.get_overdue_tasks(session)
+        base = config.WEB_BASE_URL.rstrip("/")
 
         all_tasks = []
         seen_ids = set()
@@ -60,25 +94,27 @@ async def check_deadlines(bot: Bot):
 
             notification_type = "overdue" if task.is_overdue else "deadline_warning"
             already_sent = await repo.was_notified_today(
-                session, task.assignee.id, task.id, notification_type
-            )
+                session, task.assignee.id, task.id, notification_type)
             if already_sent:
                 continue
 
-            text = format_deadline_warning(task)
-            web_link = f"\n\n{config.WEB_BASE_URL}/task/{task.id}"
+            text = format_deadline_warning(task) + f"\n\n{base}/task/{task.id}"
 
             try:
-                await bot.send_message(
-                    chat_id=task.assignee.telegram_id,
-                    text=text + web_link,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
+                await bot.send_message(chat_id=task.assignee.telegram_id, text=text,
+                                       parse_mode="HTML", disable_web_page_preview=True)
                 await repo.log_notification(session, task.assignee.id, task.id, notification_type)
                 logger.info(f"Deadline warning sent to {task.assignee.name} for task #{task.id}")
             except Exception:
                 logger.exception(f"Failed to send deadline warning for task #{task.id}")
+
+
+async def archive_tasks():
+    logger.info("Running task archiver")
+    async with AsyncSessionLocal() as session:
+        count = await repo.archive_old_tasks(session, days=90)
+        if count:
+            logger.info(f"Archived {count} tasks")
 
 
 def create_scheduler(bot: Bot) -> AsyncIOScheduler:
@@ -107,6 +143,15 @@ def create_scheduler(bot: Bot) -> AsyncIOScheduler:
         replace_existing=True,
     )
 
+    from agent3_pm.github_watcher import check_github_bugs
+    scheduler.add_job(
+        check_github_bugs,
+        trigger=IntervalTrigger(minutes=10),
+        id="github_bugs",
+        name="GitHub Bugs Watcher",
+        replace_existing=True,
+    )
+
     scheduler.add_job(
         archive_tasks,
         trigger=CronTrigger(hour=3, minute=0, timezone=tz),
@@ -116,11 +161,3 @@ def create_scheduler(bot: Bot) -> AsyncIOScheduler:
     )
 
     return scheduler
-
-
-async def archive_tasks():
-    logger.info("Running task archiver")
-    async with AsyncSessionLocal() as session:
-        count = await repo.archive_old_tasks(session, days=90)
-        if count:
-            logger.info(f"Archived {count} tasks")
