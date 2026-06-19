@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Вход — MarketAI Tracker{% endblock %}
+{% block header_title %}MarketAI Tracker{% endblock %}
+
+{% block content %}
+<div style="max-width:360px; margin:80px auto; padding:0 20px;">
+    <div style="background:#fff; border-radius:12px; padding:32px; border:1px solid #eee;">
+        <h2 style="font-size:18px; margin-bottom:20px; text-align:center;">Вход сотрудника</h2>
+        <p style="font-size:13px; color:#888; margin-bottom:16px; text-align:center;">Введи код приглашения от администратора</p>
+        {% if error %}
+        <div style="background:#fde8e8; color:#c62828; padding:8px 12px; border-radius:6px; font-size:13px; margin-bottom:14px;">{{ error }}</div>
+        {% endif %}
+        <form method="post" action="/my/{{ user_id }}/login">
+            <div class="form-group">
+                <label>Код приглашения</label>
+                <input type="text" name="code" required autofocus placeholder="abc123...">
+            </div>
+            <button type="submit" class="btn btn-primary" style="width:100%; margin-top:8px;">Войти</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

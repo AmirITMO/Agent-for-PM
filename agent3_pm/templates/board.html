@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{% if only_mine %}Мои задачи{% else %}{{ current_project.name if current_project else 'MarketAI' }}{% endif %}{% endblock %}
+{% block header_title %}{% if only_mine %}Мои задачи{% else %}{{ current_project.name if current_project else 'MarketAI' }}{% endif %}{% endblock %}
+{% block nav %}
+{% for p in projects %}
+<a href="/board?project_id={{ p.id }}" class="{% if not only_mine and selected_project_id == p.id %}active{% endif %}">{{ p.name }}</a>
+{% endfor %}
+<span class="nav-sep">|</span>
+<a href="/my" class="{% if only_mine %}active{% endif %}">Мои задачи</a>
+{% if can_manage %}<a href="/employees">Сотрудники</a>{% endif %}
+<a href="/settings">Настройки</a>
+{% if current_user %}<span class="nav-sep">|</span><span style="font-size:12px;color:#888;">{{ current_user.name }}</span><a href="/logout">Выйти</a>{% endif %}
+{% endblock %}
+
+{% block content %}
+{% if not only_mine and current_project %}
+<div class="members-bar">
+    <span>На доске:</span>
+    {% if members %}
+        {% for m in members %}<span class="member-chip">{{ m.name }}</span>{% endfor %}
+    {% else %}
+        <span style="color:#aaa;">никого ещё нет</span>
+    {% endif %}
+    <a href="/employees" style="color:#1565c0; text-decoration:none; margin-left:8px;">Управлять доступом</a>
+</div>
+{% endif %}
+
+<div class="kanban-wrap">
+    {% for col in kanban_columns %}
+    <div class="kanban-col">
+        <div class="col-head">
+            <span class="col-title">{{ status_label[col] }}</span>
+            <span class="col-count">{{ columns[col]|length }}</span>
+        </div>
+        <div class="col-body">
+            {% for t in columns[col] %}
+            <a href="/task/{{ t.id }}?back={% if only_mine %}/my{% else %}/board?project_id={{ selected_project_id or '' }}{% endif %}" class="card" style="display:block; text-decoration:none; color:inherit;">
+                {% if t.is_red %}<div class="card-priority"></div>{% endif %}
+                {% if t.assignee != '—' %}<div class="card-avatar">{{ t.assignee[:2] }}</div>{% endif %}
+                <div class="card-title">{{ t.title }}</div>
+                {% if t.description %}<div class="card-desc">{{ t.description }}</div>{% endif %}
+                <div class="card-meta">
+                    {% if t.is_bug %}<span class="tag-bug">Баг</span>{% endif %}
+                    <span class="tag-pr">P{{ t.priority }}</span>
+                    {% if t.estimated_hours %}<span class="card-hours">{{ t.estimated_hours }}ч</span>{% endif %}
+                    {% if t.due_date %}
+                    <span class="card-due {% if t.is_overdue %}card-due-overdue{% else %}card-due-normal{% endif %}">{{ t.due_date.strftime('%d.%m') }}</span>
+                    {% endif %}
+                    {% if only_mine and t.project != '—' %}<span class="card-hours">{{ t.project }}</span>{% endif %}
+                    {% if t.comments_count %}<span class="card-hours">{{ t.comments_count }} комм.</span>{% endif %}
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% if not only_mine %}
+        <div class="add-task" onclick="openAdd('{{ selected_project_id or '' }}', '{{ col }}')">+ Добавить задачу</div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Add Task Modal -->
+<div id="addModal" class="modal-overlay">
+    <div class="modal" style="width:520px; max-width:92vw;">
+        <h2>Новая задача</h2>
+        <form id="addForm" method="post" action="/api/tasks">
+            <input type="hidden" name="project_id">
+            <input type="hidden" name="status" value="backlog">
+            <input type="hidden" name="redirect" value="/board">
+            <div class="form-group"><label>Название</label><input type="text" name="title" required></div>
+            <div class="form-group"><label>Описание</label><textarea name="description"></textarea></div>
+            <div class="form-group">
+                <label>Исполнитель</label>
+                <select name="assignee_id"><option value="">не назначен</option>{% for u in users %}<option value="{{ u.id }}">{{ u.name }}{% if u.position %} — {{ u.position }}{% endif %}</option>{% endfor %}</select>
+            </div>
+            <div style="display:flex;gap:10px;">
+                <div class="form-group" style="flex:1"><label>Приоритет</label><select name="priority">{% for p in priorities %}<option value="{{ p }}" {% if p == default_priority %}selected{% endif %}>{{ priority_label[p] }}</option>{% endfor %}</select></div>
+                <div class="form-group" style="flex:1"><label>Оценка (часы)</label><input type="number" name="estimated_hours" step="0.25" min="0"></div>
+            </div>
+            <div class="form-group checkbox-row"><input type="checkbox" name="is_bug" value="1" id="addBug"><label for="addBug" style="margin:0;">Баг (красная метка)</label></div>
+            <div class="form-group"><label>Дедлайн</label><input type="date" name="due_date"></div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;">
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('addModal').classList.remove('active')">Отмена</button>
+                <button type="submit" class="btn btn-primary">Создать</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var REDIRECT = "{% if only_mine %}/my{% else %}/board?project_id={{ selected_project_id or '' }}{% endif %}";
+function openAdd(pid, st) {
+    var f = document.getElementById('addForm');
+    f.project_id.value = pid;
+    f.status.value = st;
+    f.redirect.value = REDIRECT;
+    document.getElementById('addModal').classList.add('active');
+}
+document.getElementById('addModal').addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('active');
+});
+</script>
+{% endblock %}

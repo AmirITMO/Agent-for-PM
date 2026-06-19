@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}{{ current_project.name if current_project else 'MarketAI' }}{% endblock %}
+{% block header_title %}{{ current_project.name if current_project else 'MarketAI' }}{% endblock %}
+{% block nav %}
+{% for p in projects %}
+<a href="/admin?project_id={{ p.id }}" style="{% if selected_project_id == p.id %}color:#000;font-weight:600{% endif %}">{{ p.name }}</a>
+{% endfor %}
+<span style="color:#eee">|</span>
+<a href="/admin/tasks">Список</a>
+<a href="/admin/users">Сотрудники</a>
+<a href="/admin/settings">Настройки</a>
+{% endblock %}
+
+{% block content %}
+<div class="kanban-wrap">
+    {% for col in kanban_columns %}
+    <div class="kanban-col">
+        <div class="col-head">
+            <div class="col-head-left">
+                <span class="col-title">{{ status_label[col] }}</span>
+                <span class="col-count">{{ columns[col]|length }}</span>
+            </div>
+            <span class="col-menu">...</span>
+        </div>
+        <div class="col-body">
+            {% for t in columns[col] %}
+            <div class="card" onclick="openEdit({{ t.id }}, '{{ t.title|e }}', '{{ (t.description or '')|e }}', '{{ t.priority }}', '{{ t.assignee_id or '' }}', '{{ t.estimated_hours or '' }}', '{{ t.due_date.isoformat() if t.due_date else '' }}', '{{ t.status }}')">
+                {% if t.priority in ['bug', 'urgent'] %}
+                <div class="card-priority {{ t.priority }}"></div>
+                {% endif %}
+                {% if t.assignee != '—' %}
+                <div class="card-avatar">{{ t.assignee[:2] }}</div>
+                {% endif %}
+                <div class="card-title">{{ t.title }}</div>
+                {% if t.description %}
+                <div class="card-desc">{{ t.description }}</div>
+                {% endif %}
+                <div class="card-meta">
+                    {% if t.estimated_hours %}
+                    <span class="card-hours">{{ t.estimated_hours }}ч</span>
+                    {% endif %}
+                    {% if t.due_date %}
+                    <span class="card-due {% if t.is_overdue %}card-due-overdue{% else %}card-due-normal{% endif %}">
+                        {{ t.due_date.strftime('%d %b') }}
+                    </span>
+                    {% endif %}
+                    {% if t.comments_count %}
+                    <span class="card-comments">{{ t.comments_count }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="add-task" onclick="openAdd('{{ selected_project_id or '' }}', '{{ col }}')">+ Добавить задачу</div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Edit Task Modal -->
+<div id="editModal" class="modal-overlay">
+    <div class="modal">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+            <h2 style="margin:0">Редактировать задачу</h2>
+            <span style="color:#999;cursor:pointer;font-size:18px;" onclick="document.getElementById('editModal').classList.remove('active')">x</span>
+        </div>
+        <form id="editForm" method="post">
+            <div class="form-group">
+                <label>Название</label>
+                <input type="text" name="title" id="eTitle" required>
+            </div>
+            <div class="form-group">
+                <label>Описание</label>
+                <textarea name="description" id="eDesc"></textarea>
+            </div>
+            <div class="form-group">
+                <label>Исполнитель</label>
+                <select name="assignee_id" id="eAssignee">
+                    <option value="">не назначен</option>
+                    {% for u in users %}<option value="{{ u.id }}">{{ u.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div style="display:flex;gap:10px;">
+                <div class="form-group" style="flex:1">
+                    <label>Приоритет</label>
+                    <select name="priority" id="ePriority">
+                        {% for p in priorities %}<option value="{{ p }}">{{ priority_label[p] }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>Оценка (часы)</label>
+                    <input type="number" name="estimated_hours" id="eHours" step="0.25" min="0">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Дедлайн</label>
+                <input type="date" name="due_date" id="eDue">
+            </div>
+            <input type="hidden" name="redirect" value="/admin?project_id={{ selected_project_id or '' }}">
+            <div style="display:flex;gap:10px;justify-content:space-between;margin-top:16px;">
+                <div id="doneWrap" style="display:none;">
+                    <button type="button" class="btn" style="background:#16a34a;color:#fff;" onclick="markDone()">Выполнено</button>
+                </div>
+                <div style="display:flex;gap:10px;margin-left:auto;">
+                    <button type="button" class="btn btn-secondary" onclick="document.getElementById('editModal').classList.remove('active')">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </div>
+        </form>
+        <form id="doneForm" method="post" style="display:none;">
+            <input type="hidden" name="redirect" value="/admin?project_id={{ selected_project_id or '' }}">
+        </form>
+    </div>
+</div>
+
+<!-- Add Task Modal -->
+<div id="addModal" class="modal-overlay">
+    <div class="modal">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+            <h2 style="margin:0">Новая задача</h2>
+            <span style="color:#999;cursor:pointer;font-size:18px;" onclick="document.getElementById('addModal').classList.remove('active')">x</span>
+        </div>
+        <form method="post" action="/api/tasks">
+            <input type="hidden" name="project_id" id="addPid">
+            <input type="hidden" name="status" id="addSt" value="backlog">
+            <div class="form-group">
+                <label>Название</label>
+                <input type="text" name="title" required>
+            </div>
+            <div class="form-group">
+                <label>Описание</label>
+                <textarea name="description"></textarea>
+            </div>
+            <div class="form-group">
+                <label>Исполнитель</label>
+                <select name="assignee_id">
+                    <option value="">не назначен</option>
+                    {% for u in users %}<option value="{{ u.id }}">{{ u.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div style="display:flex;gap:10px;">
+                <div class="form-group" style="flex:1">
+                    <label>Приоритет</label>
+                    <select name="priority">
+                        {% for p in priorities %}<option value="{{ p }}">{{ priority_label[p] }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>Оценка (часы)</label>
+                    <input type="number" name="estimated_hours" step="0.25" min="0">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Дедлайн</label>
+                <input type="date" name="due_date">
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;">
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('addModal').classList.remove('active')">Отмена</button>
+                <button type="submit" class="btn btn-primary">Создать</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var currentTaskId = null;
+
+function openEdit(id, title, desc, priority, assigneeId, hours, due, status) {
+    currentTaskId = id;
+    document.getElementById('editForm').action = '/api/tasks/' + id;
+    document.getElementById('eTitle').value = title;
+    document.getElementById('eDesc').value = desc;
+    document.getElementById('ePriority').value = priority;
+    document.getElementById('eAssignee').value = assigneeId;
+    document.getElementById('eHours').value = hours;
+    document.getElementById('eDue').value = due;
+    document.getElementById('doneForm').action = '/api/tasks/' + id + '/done';
+    var isDone = (status === 'done' || status === 'approved');
+    document.getElementById('doneWrap').style.display = isDone ? 'none' : 'block';
+    document.getElementById('editModal').classList.add('active');
+}
+
+function markDone() {
+    document.getElementById('doneForm').submit();
+}
+
+function openAdd(pid, st) {
+    document.getElementById('addPid').value = pid;
+    document.getElementById('addSt').value = st;
+    document.getElementById('addModal').classList.add('active');
+}
+
+document.querySelectorAll('.modal-overlay').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+        if (e.target === el) el.classList.remove('active');
+    });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,58 @@
+# dependencies
+node_modules
+vendor
+venv
+.venv
+
+# build
+dist
+build
+out
+target
+
+# cache
+.cache
+.tmp
+coverage
+
+# git
+.git
+
+# logs
+logs
+*.log
+
+# lockfiles
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.webp
+
+# video
+*.mp4
+*.mov
+
+# archives
+*.zip
+*.tar
+*.gz
+*.rar
+
+# docs
+docs/archive
+docs/old
+
+# secrets
+.env
+
+# ide
+.vscode
+.idea
+.DS_Store

@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agent3_pm
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  agent3:
+    build: .
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/agent3_pm
+      DATABASE_URL_SYNC: postgresql://postgres:postgres@db:5432/agent3_pm
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost:8080}
+      ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-}
+      TIMEZONE: Europe/Moscow
+      MORNING_SUMMARY_HOUR: "9"
+      DEADLINE_CHECK_INTERVAL_MINUTES: "30"
+      DEADLINE_WARNING_HOURS: "24"
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

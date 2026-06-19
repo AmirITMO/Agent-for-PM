@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}{{ task.title }}{% endblock %}
+{% block header_title %}Задача{% endblock %}
+{% block nav %}
+<a href="/board">Канбан</a>
+<a href="/my">Мои задачи</a>
+{% if can_manage %}<a href="/employees">Сотрудники</a>{% endif %}
+<a href="/settings">Настройки</a>
+{% if current_user %}<span class="nav-sep">|</span><a href="/logout">Выйти</a>{% endif %}
+{% endblock %}
+
+{% block content %}
+<div style="max-width:720px; margin:24px auto; padding:0 20px;">
+
+    <!-- Share -->
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:16px;">
+        <input type="text" id="shareUrl" value="{{ share_url }}" readonly
+               style="flex:1; padding:7px 10px; border:1px solid #ddd; border-radius:6px; font-size:12px; color:#666;">
+        <button class="btn btn-secondary btn-sm" onclick="copyShare()">Копировать ссылку</button>
+    </div>
+
+    <!-- Task card / edit -->
+    <div style="background:#fff; border:1px solid #eee; border-radius:12px; padding:20px; margin-bottom:20px;">
+        <form method="post" action="/api/tasks/{{ task.id }}">
+            <input type="hidden" name="redirect" value="{{ back_url }}">
+            <div class="form-group">
+                <label>Название</label>
+                <input type="text" name="title" value="{{ task.title }}" required>
+            </div>
+            <div class="form-group">
+                <label>Описание</label>
+                <textarea name="description" style="height:80px;">{{ task.description or '' }}</textarea>
+            </div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <div class="form-group" style="flex:1; min-width:140px;">
+                    <label>Проект</label>
+                    <select name="project_id">
+                        <option value="">—</option>
+                        {% for p in projects %}<option value="{{ p.id }}" {% if task.project_id == p.id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" style="flex:1; min-width:140px;">
+                    <label>Исполнитель</label>
+                    <select name="assignee_id">
+                        <option value="">не назначен</option>
+                        {% for u in users %}<option value="{{ u.id }}" {% if task.assignee_id == u.id %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <div class="form-group" style="flex:1; min-width:120px;">
+                    <label>Статус</label>
+                    <select name="status">
+                        {% for s in statuses %}<option value="{{ s }}" {% if task.status.value == s %}selected{% endif %}>{{ status_label[s] }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" style="flex:1; min-width:120px;">
+                    <label>Приоритет</label>
+                    <select name="priority">
+                        {% for p in priorities %}<option value="{{ p }}" {% if task.priority == p %}selected{% endif %}>{{ priority_label[p] }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="form-group" style="flex:1; min-width:100px;">
+                    <label>Оценка (часы)</label>
+                    <input type="number" name="estimated_hours" step="0.25" min="0" value="{{ task.estimated_hours or '' }}">
+                </div>
+                <div class="form-group" style="flex:1; min-width:120px;">
+                    <label>Дедлайн</label>
+                    <input type="date" name="due_date" value="{{ task.due_date.isoformat() if task.due_date else '' }}">
+                </div>
+            </div>
+            <div class="form-group checkbox-row">
+                <input type="checkbox" name="is_bug" value="1" id="dBug" {% if task.is_bug %}checked{% endif %}>
+                <label for="dBug" style="margin:0;">Баг (красная метка)</label>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px;">
+                <div>
+                    {% if task.status.value not in ['done', 'approved'] %}
+                    <form method="post" action="/api/tasks/{{ task.id }}/done" style="display:inline;">
+                        <input type="hidden" name="redirect" value="{{ back_url }}">
+                        <button type="submit" class="btn btn-green">Выполнено</button>
+                    </form>
+                    {% endif %}
+                </div>
+                <div style="display:flex; gap:10px;">
+                    <a href="{{ back_url }}" class="btn btn-secondary" style="text-decoration:none;">Назад</a>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <!-- Comments -->
+    <h3 style="font-size:15px; margin-bottom:12px;">Комментарии ({{ task.comments|length }})</h3>
+
+    {% for c in task.comments %}
+    <div style="background:#f9f9f9; border-radius:8px; padding:12px 14px; margin-bottom:8px;">
+        <div style="font-size:12px; color:#888; margin-bottom:4px;">
+            {{ c.user.name if c.user else 'Аноним' }} · {{ c.created_at.strftime('%d.%m %H:%M') if c.created_at else '' }}
+        </div>
+        {% if c.text %}<div style="margin-bottom:6px; white-space:pre-wrap;">{{ c.text }}</div>{% endif %}
+        {% for a in c.attachments %}
+            {% if a.is_image %}
+            <a href="/uploads/{{ a.stored_name }}" target="_blank">
+                <img src="/uploads/{{ a.stored_name }}" style="max-width:100%; max-height:300px; border-radius:8px; margin-top:6px; display:block;">
+            </a>
+            {% else %}
+            <a href="/uploads/{{ a.stored_name }}" target="_blank" style="display:inline-block; margin-top:6px; padding:6px 10px; background:#fff; border:1px solid #ddd; border-radius:6px; font-size:12px; color:#1565c0; text-decoration:none;">{{ a.filename }}</a>
+            {% endif %}
+        {% endfor %}
+    </div>
+    {% else %}
+    <p style="color:#aaa; font-size:13px;">Пока нет комментариев.</p>
+    {% endfor %}
+
+    <!-- Add comment -->
+    <form method="post" action="/api/tasks/{{ task.id }}/comment" enctype="multipart/form-data"
+          style="margin-top:14px; background:#fff; border:1px solid #eee; border-radius:8px; padding:12px;">
+        <textarea name="text" placeholder="Написать комментарий..." style="width:100%; height:60px; border:1px solid #ddd; border-radius:6px; padding:8px; font-family:inherit; font-size:13px; resize:vertical;"></textarea>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+            <input type="file" name="files" multiple>
+            <button type="submit" class="btn btn-primary btn-sm">Отправить</button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function copyShare() {
+    var el = document.getElementById('shareUrl');
+    el.select();
+    document.execCommand('copy');
+}
+</script>
+{% endblock %}

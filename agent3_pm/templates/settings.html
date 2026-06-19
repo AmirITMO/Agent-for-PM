@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Настройки — MarketAI Tracker{% endblock %}
+{% block header_title %}Настройки{% endblock %}
+{% block nav %}
+<a href="/board">Канбан</a>
+<a href="/my">Мои задачи</a>
+{% if can_manage %}<a href="/employees">Сотрудники</a>{% endif %}
+<a href="/settings" class="active">Настройки</a>
+{% if current_user %}<span class="nav-sep">|</span><a href="/logout">Выйти</a>{% endif %}
+{% endblock %}
+
+{% block content %}
+<div style="max-width:600px; margin:24px auto; padding:0 20px;">
+    <div style="background:#fff; border-radius:12px; padding:24px; border:1px solid #e0e0e0;">
+        <h2 style="font-size:18px; margin-bottom:20px;">Настройки уведомлений</h2>
+        <form method="post" action="/api/settings">
+            {% for key in keys %}
+            <div class="form-group">
+                <label>{{ labels[key] }}</label>
+                <input type="text" name="{{ key }}" value="{{ settings[key] }}" required>
+            </div>
+            {% endfor %}
+            <div style="margin-top:20px; display:flex; justify-content:flex-end;">
+                <button type="submit" class="btn btn-primary">Сохранить</button>
+            </div>
+        </form>
+        <p style="margin-top:16px; font-size:13px; color:#888;">
+            Изменения вступают в силу после перезапуска приложения.
+            Также можно менять через бота: /settings ключ значение
+        </p>
+    </div>
+</div>
+{% endblock %}

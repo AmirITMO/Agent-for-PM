@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Все задачи — MarketAI Tracker{% endblock %}
+{% block header_title %}Все задачи ({{ total }}){% endblock %}
+{% block nav %}
+<a href="/admin">Канбан</a>
+<a href="/admin/tasks">Список</a>
+<a href="/admin/users">Сотрудники</a>
+{% endblock %}
+
+{% block content %}
+<div class="filter-bar">
+    <form method="get" action="/admin/tasks" style="display:flex; gap:12px; align-items:center;">
+        <label style="font-size:13px; color:#555;">Проект:</label>
+        <select name="project_id" onchange="this.form.submit()">
+            <option value="">Все</option>
+            {% for p in projects %}
+            <option value="{{ p.id }}" {% if selected_project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+            {% endfor %}
+        </select>
+        <label style="font-size:13px; color:#555;">Статус:</label>
+        <select name="status" onchange="this.form.submit()">
+            <option value="">Все</option>
+            {% for s in statuses %}
+            <option value="{{ s }}" {% if selected_status == s %}selected{% endif %}>{{ status_label[s] }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+<div style="padding:12px 24px;">
+    <table style="width:100%; border-collapse:collapse; background:#fff; border-radius:8px; overflow:hidden; border:1px solid #e0e0e0;">
+        <thead>
+            <tr style="background:#f5f5f5; text-align:left;">
+                <th style="padding:10px 12px; font-size:13px; color:#555;">Задача</th>
+                <th style="padding:10px 12px; font-size:13px; color:#555; width:140px;">Проект</th>
+                <th style="padding:10px 12px; font-size:13px; color:#555; width:120px;">Статус</th>
+                <th style="padding:10px 12px; font-size:13px; color:#555; width:90px;">Приоритет</th>
+                <th style="padding:10px 12px; font-size:13px; color:#555; width:140px;">Исполнитель</th>
+                <th style="padding:10px 12px; font-size:13px; color:#555; width:60px;">Часы</th>
+                <th style="padding:10px 12px; font-size:13px; color:#555; width:90px;">Дедлайн</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for t in tasks %}
+            <tr style="border-top:1px solid #eee;{% if t.is_overdue %} background:#fff5f5;{% endif %}">
+                <td style="padding:8px 12px; font-size:14px;">
+                    <a href="/task/{{ t.id }}" style="color:#333; text-decoration:none; font-weight:500;">{{ t.title }}</a>
+                    {% if t.is_overdue %}<span class="badge badge-overdue" style="margin-left:6px;">Просрочено</span>{% endif %}
+                    {% if t.is_hot and not t.is_overdue %}<span class="badge badge-hot" style="margin-left:6px;">Горит</span>{% endif %}
+                </td>
+                <td style="padding:8px 12px; font-size:13px; color:#666;">{{ t.project }}</td>
+                <td style="padding:8px 12px; font-size:13px;">{{ t.status_label }}</td>
+                <td style="padding:8px 12px; font-size:13px;">
+                    {% if t.priority == 'urgent' %}<span class="badge badge-urgent">Срочный</span>
+                    {% elif t.priority == 'bug' %}<span class="badge badge-bug">Баг</span>
+                    {% else %}Обычный{% endif %}
+                </td>
+                <td style="padding:8px 12px; font-size:13px;">{{ t.assignee }}</td>
+                <td style="padding:8px 12px; font-size:13px; color:#888;">{{ t.estimated_hours or '—' }}</td>
+                <td style="padding:8px 12px; font-size:13px;{% if t.is_overdue %} color:#c62828; font-weight:600;{% endif %}">
+                    {{ t.due_date.strftime('%d.%m.%Y') if t.due_date else '—' }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

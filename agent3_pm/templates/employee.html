@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Мои задачи — {{ user.name }}{% endblock %}
+{% block header_title %}{{ user.name }}{% if user.position %} ({{ user.position }}){% endif %}{% endblock %}
+{% block nav %}
+<a href="/my/{{ user.id }}">Мои задачи</a>
+<a href="/logout">Выйти</a>
+{% endblock %}
+
+{% block content %}
+<div class="kanban-wrap">
+    {% for col in kanban_columns %}
+    {% set tasks = columns[col] %}
+    {% if tasks|length > 0 %}
+    <div class="kanban-col">
+        <div class="col-head">
+            <div class="col-head-left">
+                <span class="col-title">{{ status_label[col] }}</span>
+                <span class="col-count">{{ tasks|length }}</span>
+            </div>
+        </div>
+        <div class="col-body">
+            {% for t in tasks %}
+            <div class="card">
+                {% if t.priority in ['bug', 'urgent'] %}
+                <div class="card-priority {{ t.priority }}"></div>
+                {% endif %}
+                <div class="card-title">{{ t.title }}</div>
+                {% if t.description %}
+                <div class="card-desc">{{ t.description }}</div>
+                {% endif %}
+                <div class="card-meta">
+                    {% if t.estimated_hours %}<span class="card-hours">{{ t.estimated_hours }}ч</span>{% endif %}
+                    {% if t.due_date %}
+                    <span class="card-due {% if t.is_overdue %}card-due-overdue{% else %}card-due-normal{% endif %}">
+                        {{ t.due_date.strftime('%d %b') }}
+                    </span>
+                    {% endif %}
+                    {% if t.project != '—' %}<span class="card-hours">{{ t.project }}</span>{% endif %}
+                </div>
+                <div style="margin-top:6px; display:flex; gap:6px; align-items:center;">
+                    <form method="post" action="/api/tasks/{{ t.id }}/status" style="display:inline;">
+                        <input type="hidden" name="redirect" value="/my/{{ user.id }}">
+                        <select name="status" onchange="this.form.submit()" class="status-select" style="font-size:11px;padding:2px 4px;border:1px solid #eee;border-radius:3px;color:#888;">
+                            {% for s in statuses %}
+                            <option value="{{ s }}" {% if s == t.status %}selected{% endif %}>{{ status_label[s] }}</option>
+                            {% endfor %}
+                        </select>
+                    </form>
+                    {% if t.status not in ['done', 'approved'] %}
+                    <form method="post" action="/api/tasks/{{ t.id }}/done" style="display:inline;">
+                        <input type="hidden" name="redirect" value="/my/{{ user.id }}">
+                        <button type="submit" style="font-size:10px;padding:2px 8px;background:#16a34a;color:#fff;border:none;border-radius:3px;cursor:pointer;">Выполнено</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+    {% set total = columns.values()|map('length')|sum %}
+    {% if total == 0 %}
+    <div style="padding:40px; color:#888; text-align:center; width:100%;">
+        Нет назначенных задач. Администратор назначит задачи через канбан.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

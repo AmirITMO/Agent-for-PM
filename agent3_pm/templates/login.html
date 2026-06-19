@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Вход — MarketAI Tracker{% endblock %}
+{% block header_title %}MarketAI Tracker{% endblock %}
+
+{% block content %}
+<div style="max-width:360px; margin:80px auto; padding:0 20px;">
+    <div style="background:#fff; border-radius:12px; padding:32px; border:1px solid #eee;">
+        <h2 style="font-size:18px; margin-bottom:20px; text-align:center;">Вход в MarketAI Tracker</h2>
+        {% if error %}
+        <div style="background:#fde8e8; color:#c62828; padding:8px 12px; border-radius:6px; font-size:13px; margin-bottom:14px;">{{ error }}</div>
+        {% endif %}
+
+        <div style="margin-bottom:20px;">
+            <p style="font-size:13px; color:#888; margin-bottom:10px;">Для руководителя:</p>
+            <form method="post" action="/login">
+                <input type="hidden" name="login_type" value="admin">
+                <div class="form-group">
+                    <label>Имя</label>
+                    <input type="text" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label>Пароль</label>
+                    <input type="password" name="password" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%; margin-top:8px;">Войти как админ</button>
+            </form>
+        </div>
+
+        <div style="border-top:1px solid #eee; padding-top:16px;">
+            <p style="font-size:13px; color:#888; margin-bottom:10px;">Для сотрудника:</p>
+            <form method="post" action="/login">
+                <input type="hidden" name="login_type" value="employee">
+                <div class="form-group">
+                    <label>Invite-код</label>
+                    <input type="text" name="invite_code" placeholder="код от администратора">
+                </div>
+                <button type="submit" class="btn btn-secondary" style="width:100%; margin-top:8px;">Войти по коду</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
