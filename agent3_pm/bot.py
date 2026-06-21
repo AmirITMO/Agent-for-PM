@@ -287,7 +287,8 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Notify assignee
         if assignee_id and assignee_id != (user.id if user else None):
-            task = await repo.get_task_by_id(session, task.id)
+            from agent3_pm.repository import get_task_by_id as _get_task
+            task = await _get_task(session, task.id)
             if task and task.assignee and task.assignee.telegram_id:
                 from telegram import Bot
                 try:
