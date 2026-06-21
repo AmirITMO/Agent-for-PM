@@ -298,12 +298,16 @@ async def create_task_api(request: Request, session: AsyncSession = Depends(get_
     estimated_hours = float(hours_raw) if hours_raw and hours_raw.strip() else None
     dd = datetime.date.fromisoformat(due_raw) if due_raw and due_raw.strip() else None
 
-    await repo.create_task(
+    task = await repo.create_task(
         session, title=title, project_id=proj_id, description=description,
         status=TaskStatus(status), priority=priority, is_bug=is_bug,
         assignee_id=assign_id, creator_id=current.id if current else None,
         estimated_hours=estimated_hours, due_date=dd,
     )
+    if assign_id:
+        task = await repo.get_task_by_id(session, task.id)
+        creator_name = current.name if current else None
+        await _notify_assignee(session, task, creator_name)
     return RedirectResponse(redirect, status_code=303)
 
 
@@ -417,6 +421,30 @@ async def _notify_managers_done(session, task):
 
 def _abs_url_simple(path: str) -> str:
     return f"{config.WEB_BASE_URL.rstrip('/')}{path}"
+
+
+async def _notify_assignee(session, task, creator_name: str | None = None):
+    """Notify assignee when task is assigned to them."""
+    try:
+        if not task.assignee or not task.assignee.telegram_id:
+            return
+        from telegram import Bot
+        if not config.TELEGRAM_BOT_TOKEN:
+            return
+        bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        by = f" от {creator_name}" if creator_name else ""
+        project = task.project.name if task.project else "—"
+        text = (f"Тебе назначена задача{by}\n\n"
+                f"{task.title}\n"
+                f"Проект: {project}\n"
+                f"Приоритет: P{task.priority}\n"
+                f"{_abs_url_simple(f'/task/{task.id}')}")
+        if task.due_date:
+            text += f"\nДедлайн: {task.due_date.strftime('%d.%m.%Y')}"
+        await bot.send_message(chat_id=task.assignee.telegram_id, text=text)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("notify assignee failed")
 
 
 # ── Settings ──

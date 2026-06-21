@@ -42,7 +42,10 @@ WEB URL: {context_data.get('web_base_url', '')}
 1. СОЗДАТЬ задачу:
 {{"action": "create_task", "title": "...", "description": null, "assignee_name": "...", "priority": 0-3, "is_bug": false, "due_date": "YYYY-MM-DD" или null, "project_name": "...", "status": "...", "estimated_hours": null}}
 
-ОБЯЗАТЕЛЬНО спроси если не указаны: project_name и status. Спрашивай по одному.
+ОБЯЗАТЕЛЬНЫЕ ПОЛЯ — ВСЕГДА спрашивай если не указаны, НЕ угадывай, НЕ ставь по умолчанию:
+- project_name — ВСЕГДА спроси "На какую доску?" если не указан
+- status — ВСЕГДА спроси "На какой этап?" если не указан
+Спрашивай по одному. Сначала доску, потом этап.
 {{"action": "clarify", "message": "вопрос"}}
 
 2. ОТВЕТИТЬ на вопрос о задачах:
@@ -60,6 +63,9 @@ WEB URL: {context_data.get('web_base_url', '')}
 
 Ищи задачу по контексту: «задачу Амира связанную с сайтом» — найди в all_tasks задачу где assignee содержит «Амир» и title содержит «сайт». Используй task_id из данных.
 
+«Перенеси задачу X на доску Marketing» = изменить project_id через update_task
+«Перенеси задачу X с Dev на Marketing» = то же самое
+
 «Переставь на следующий уровень» — посмотри текущий status и поставь следующий по порядку:
 backlog→planning, planning→todo, todo→wip, wip→done, done→approved
 
@@ -69,7 +75,13 @@ backlog→planning, planning→todo, todo→wip, wip→done, done→approved
 {{"action": "delete_task", "task_id": число}}
 Только если пользователь явно попросил удалить.
 
-5. УТОЧНИТЬ:
+5. НАПОМНИТЬ пользователю:
+{{"action": "set_reminder", "message": "текст напоминания", "delay_minutes": число минут}}
+Примеры: "напомни через 30 минут проверить задачу" → delay_minutes: 30
+"напомни через час" → delay_minutes: 60
+"напомни вечером" → delay_minutes: подсчитай до 18:00
+
+6. УТОЧНИТЬ:
 {{"action": "clarify", "message": "вопрос"}}
 
 ВАЖНО:

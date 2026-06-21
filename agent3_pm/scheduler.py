@@ -109,6 +109,35 @@ async def check_deadlines(bot: Bot):
                 logger.exception(f"Failed to send deadline warning for task #{task.id}")
 
 
+async def send_deadline_reminders(bot: Bot):
+    """Send deadline reminders to ALL users (day/evening)."""
+    logger.info("Sending deadline reminders")
+    async with AsyncSessionLocal() as session:
+        all_users = await repo.get_all_users(session)
+        base = config.WEB_BASE_URL.rstrip("/")
+
+        for user in all_users:
+            if not user.telegram_id:
+                continue
+            tasks = await repo.get_all_tasks(session, assignee_id=user.id)
+            active = [t for t in tasks if t.status in ACTIVE_STATUSES and t.due_date]
+            if not active:
+                continue
+
+            lines = ["Напоминание о дедлайнах:\n"]
+            for t in sorted(active, key=lambda x: x.due_date):
+                dd = t.due_date.strftime('%d.%m.%Y')
+                overdue = " (ПРОСРОЧЕНО)" if t.is_overdue else ""
+                lines.append(f"{t.title} — {dd}{overdue}\n{base}/task/{t.id}")
+
+            try:
+                await bot.send_message(chat_id=user.telegram_id, text="\n".join(lines),
+                                       disable_web_page_preview=True)
+                logger.info(f"Reminder sent to {user.name}")
+            except Exception:
+                logger.exception(f"Failed reminder to {user.name}")
+
+
 async def archive_tasks():
     logger.info("Running task archiver")
     async with AsyncSessionLocal() as session:
@@ -142,6 +171,17 @@ def create_scheduler(bot: Bot) -> AsyncIOScheduler:
         name="Deadline Check",
         replace_existing=True,
     )
+
+    # Deadline reminders 3x/day (morning handled by send_morning_summary)
+    for hour, label in [(13, "day"), (18, "evening")]:
+        scheduler.add_job(
+            send_deadline_reminders,
+            trigger=CronTrigger(hour=hour, minute=0, timezone=tz),
+            args=[bot],
+            id=f"reminder_{label}",
+            name=f"Deadline Reminder ({label})",
+            replace_existing=True,
+        )
 
     from agent3_pm.github_watcher import check_github_bugs
     scheduler.add_job(

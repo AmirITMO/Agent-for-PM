@@ -51,6 +51,7 @@ def _menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
         [KeyboardButton("Мои задачи"), KeyboardButton("Просрочки")],
         [KeyboardButton("Задать задачу"), KeyboardButton("Спросить по задачам")],
+        [KeyboardButton("Инструкции")],
     ], resize_keyboard=True)
 
 
@@ -284,6 +285,20 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except OSError:
                     pass
 
+        # Notify assignee
+        if assignee_id and assignee_id != (user.id if user else None):
+            task = await repo.get_task_by_id(session, task.id)
+            if task and task.assignee and task.assignee.telegram_id:
+                from telegram import Bot
+                try:
+                    bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
+                    base = config.WEB_BASE_URL.rstrip("/")
+                    notify_text = (f"Тебе назначена задача от {user.name if user else '—'}\n\n"
+                                   f"{task.title}\nP{task.priority}\n{base}/task/{task.id}")
+                    await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify_text)
+                except Exception:
+                    pass
+
     context.user_data.pop("pending_task", None)
     context.user_data.pop("pending_files", None)
     context.user_data.pop("waiting_files", None)
@@ -332,6 +347,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply = "\n".join(lines)
             reply += f"\n\n{_enter_url(user.id)}"
             await _reply(update, reply, _menu_kb())
+            return
+
+        if text == "Инструкции":
+            instructions = (
+                "<b>Как пользоваться трекером:</b>\n\n"
+                "<b>Кнопки меню:</b>\n"
+                "- Мои задачи — список твоих активных задач\n"
+                "- Просрочки — просроченные и горящие\n"
+                "- Задать задачу — создать задачу текстом или голосовым\n"
+                "- Спросить по задачам — вопросы и управление канбаном\n\n"
+                "<b>Создание задачи:</b>\n"
+                "Нажми «Задать задачу» и опиши что нужно. Можно текстом или голосовым.\n"
+                "Агент спросит на какую доску и этап поставить.\n\n"
+                "<b>Управление через «Спросить»:</b>\n"
+                "- Какие задачи у Амира?\n"
+                "- Переставь задачу X на следующий этап\n"
+                "- Перенеси задачу X на доску Marketing\n"
+                "- Отметь задачу X выполненной\n"
+                "- Удали задачу X\n"
+                "- Напомни через 30 минут проверить задачу\n\n"
+                "<b>Веб-трекер:</b>\n"
+                f"{_enter_url(user.id)}\n"
+                "Канбан, редактирование задач, комментарии, файлы.\n\n"
+                "<b>Уведомления:</b>\n"
+                "- При назначении задачи\n"
+                "- Напоминания о дедлайнах 3 раза в день\n"
+                "- Утренняя сводка руководителям"
+            )
+            await _reply(update, instructions, _menu_kb())
             return
 
         if text == "Просрочки":
@@ -490,6 +534,11 @@ async def _process_smart(update, context, text, session, user):
             if match:
                 changes["assignee_id"] = match.id
             del changes["assignee_name"]
+        if "project_name" in changes:
+            proj = await get_project_by_name(session, changes["project_name"])
+            if proj:
+                changes["project_id"] = proj.id
+            del changes["project_name"]
         if "due_date" in changes and isinstance(changes["due_date"], str):
             import datetime as dt
             try:
@@ -520,6 +569,25 @@ async def _process_smart(update, context, text, session, user):
                 await _reply(update, "Задача не найдена.")
         else:
             await _reply(update, "Не удалось определить задачу для удаления.")
+
+    elif action == "set_reminder":
+        delay = int(result.get("delay_minutes", 30))
+        msg = result.get("message", "Напоминание")
+        chat_id = update.effective_user.id
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        import asyncio
+
+        async def _send_reminder():
+            from telegram import Bot
+            try:
+                bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
+                await bot_inst.send_message(chat_id=chat_id, text=f"Напоминание:\n{msg}")
+            except Exception:
+                pass
+
+        loop = asyncio.get_event_loop()
+        loop.call_later(delay * 60, lambda: asyncio.ensure_future(_send_reminder()))
+        await _reply(update, f"Напомню через {delay} мин.")
 
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
