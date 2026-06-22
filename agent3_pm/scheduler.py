@@ -52,7 +52,7 @@ async def send_morning_summary(bot: Bot):
             if overdue:
                 lines.append(f"<b>Просрочки ({len(overdue)}):</b>")
                 for t in overdue:
-                    lines.append(f'  {t.title} — {t.due_date.strftime("%d.%m.%Y")} <a href="{base}/task/{t.id}">ссылка</a>')
+                    lines.append(f'  {t.title} — {t.due_date.strftime("%d.%m.%Y")} <a href="{base}/enter/{user.id}?next=/task/{t.id}">ссылка</a>')
             else:
                 lines.append("Просрочки — нет")
             lines.append("")
@@ -60,7 +60,7 @@ async def send_morning_summary(bot: Bot):
                 lines.append(f"<b>Дедлайны скоро ({len(hot)}):</b>")
                 for t in hot:
                     dd = t.due_date.strftime('%d.%m.%Y') if t.due_date else ""
-                    lines.append(f'  {t.title} — {dd} <a href="{base}/task/{t.id}">ссылка</a>')
+                    lines.append(f'  {t.title} — {dd} <a href="{base}/enter/{user.id}?next=/task/{t.id}">ссылка</a>')
             else:
                 lines.append("Ближайших дедлайнов нет")
 
@@ -98,7 +98,7 @@ async def check_deadlines(bot: Bot):
             if already_sent:
                 continue
 
-            text = format_deadline_warning(task) + f'\n\n<a href="{base}/task/{task.id}">Открыть задачу</a>'
+            text = format_deadline_warning(task) + f'\n\n<a href="{base}/enter/{task.assignee.id}?next=/task/{task.id}">Открыть задачу</a>'
 
             try:
                 await bot.send_message(chat_id=task.assignee.telegram_id, text=text,
@@ -128,11 +128,11 @@ async def send_deadline_reminders(bot: Bot):
             for t in sorted(active, key=lambda x: x.due_date):
                 dd = t.due_date.strftime('%d.%m.%Y')
                 overdue = " (ПРОСРОЧЕНО)" if t.is_overdue else ""
-                lines.append(f'{t.title} — {dd}{overdue} <a href="{base}/task/{t.id}">ссылка</a>')
+                lines.append(f'{t.title} — {dd}{overdue} <a href="{base}/enter/{user.id}?next=/task/{t.id}">ссылка</a>')
 
             try:
                 await bot.send_message(chat_id=user.telegram_id, text="\n".join(lines),
-                                       disable_web_page_preview=True)
+                                       parse_mode="HTML", disable_web_page_preview=True)
                 logger.info(f"Reminder sent to {user.name}")
             except Exception:
                 logger.exception(f"Failed reminder to {user.name}")

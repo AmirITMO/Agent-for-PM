@@ -100,11 +100,13 @@ async def index(request: Request, session: AsyncSession = Depends(get_session)):
 
 
 @app.get("/enter/{user_id}")
-async def enter(user_id: int, session: AsyncSession = Depends(get_session)):
+async def enter(user_id: int, next: str | None = None,
+                session: AsyncSession = Depends(get_session)):
     user = await repo.get_user_by_id(session, user_id)
     if not user:
         raise HTTPException(404, "Пользователь не найден")
-    response = RedirectResponse("/board", status_code=303)
+    redirect_to = next if next and next.startswith("/") else "/board"
+    response = RedirectResponse(redirect_to, status_code=303)
     response.set_cookie("uid", str(user.id), max_age=86400 * 30)
     response.set_cookie("auth", _make_token(user.id), max_age=86400 * 30)
     return response
