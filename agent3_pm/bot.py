@@ -236,6 +236,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("approve_edit_"):
         await query.answer()
         batch_id = data.replace("approve_edit_", "")
+        from agent3_pm.kb_watcher import get_batch as _gb
+        b = _gb(batch_id)
+        if not b or b["locked_by"] != update.effective_user.id:
+            await query.message.reply_text("Только взявший на утверждение может редактировать.")
+            return
         context.user_data["editing_batch"] = batch_id
         await query.message.reply_text("Опиши изменения текстом или голосовым.")
 
@@ -613,6 +618,28 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         await _reply(update, "Нажми /start для регистрации.")
         return
+
+    # Voice during approval edit
+    if context.user_data.get("editing_batch"):
+        voice = update.message.voice or update.message.audio
+        if voice:
+            file = await voice.get_file()
+            tmp = tempfile.NamedTemporaryFile(suffix=".ogg", delete=False)
+            tmp.close()
+            await file.download_to_drive(tmp.name)
+            await _reply(update, "Распознаю...")
+            text = await transcribe_voice(tmp.name)
+            try:
+                os.remove(tmp.name)
+            except OSError:
+                pass
+            if text:
+                await _reply(update, f"Распознано: {text}")
+                update.message.text = text
+                await _handle_approval_edit(update, context)
+            else:
+                await _reply(update, "Не распознано. Попробуй текстом.")
+            return
 
     if not context.user_data.get("chat_mode"):
         context.user_data["chat_mode"] = True
