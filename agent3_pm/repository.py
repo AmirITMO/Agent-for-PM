@@ -57,6 +57,7 @@ async def register_user(session: AsyncSession, telegram_id: int, telegram_userna
     session.add(user)
     await session.commit()
     await session.refresh(user)
+    await _auto_grant_boards(session, user)
     return user
 
 
@@ -68,7 +69,17 @@ async def create_user(session: AsyncSession, name: str, position: str | None = N
     session.add(user)
     await session.commit()
     await session.refresh(user)
+    await _auto_grant_boards(session, user)
     return user
+
+
+async def _auto_grant_boards(session: AsyncSession, user: User):
+    """Level 1 gets access to all boards automatically."""
+    from agent3_pm.models import is_level_1
+    if is_level_1(user.position):
+        projects = await get_all_projects(session)
+        for p in projects:
+            await set_board_access(session, p.id, user.id, True)
 
 
 async def update_user(session: AsyncSession, user_id: int, **kwargs) -> User | None:

@@ -121,12 +121,26 @@ async def logout():
 # ── Boards (kanban) ──
 
 async def _render_board(request, session, current, project_id, only_mine):
-    projects = await repo.get_all_projects(session)
+    all_projects = await repo.get_all_projects(session)
     users = await repo.get_all_users(session)
+
+    # Filter projects by board access (Level 1 sees all, others only with checkbox)
+    if current and not only_mine:
+        if is_level_1(current.position):
+            projects = all_projects
+        else:
+            my_board_ids = set()
+            for p in all_projects:
+                members = await repo.get_board_member_ids(session, p.id)
+                if current.id in members:
+                    my_board_ids.add(p.id)
+            projects = [p for p in all_projects if p.id in my_board_ids]
+    else:
+        projects = all_projects
 
     pid = project_id
     if not pid and projects and not only_mine:
-        pid = projects[0].id
+        pid = projects[0].id if projects else None
     current_project = next((p for p in projects if p.id == pid), None)
 
     columns = {}
@@ -165,6 +179,8 @@ async def _render_board(request, session, current, project_id, only_mine):
 async def board(request: Request, project_id: str | None = None,
                 session: AsyncSession = Depends(get_session)):
     current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/")
     pid = int(project_id) if project_id and project_id.strip() else None
     return await _render_board(request, session, current, pid, only_mine=False)
 
