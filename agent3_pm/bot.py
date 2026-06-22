@@ -420,6 +420,61 @@ def _get_client_openai():
     return _get_client()
 
 
+async def _edit_pending_task(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Edit pending task card before creation using GPT."""
+    td = context.user_data.get("pending_task")
+    if not td:
+        return
+
+    edit_prompt = f"""Текущая задача (ещё не создана):
+{json.dumps(td, ensure_ascii=False)}
+
+Пользователь просит изменить: {text}
+
+Верни обновлённый JSON задачи. Только JSON, без markdown."""
+
+    try:
+        client = _get_client_openai()
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": edit_prompt}],
+            temperature=0, max_tokens=500,
+        )
+        raw = resp.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        updated = json.loads(raw)
+        # Preserve internal keys
+        for k in list(td.keys()):
+            if k.startswith("_"):
+                updated[k] = td[k]
+        context.user_data["pending_task"] = updated
+    except Exception:
+        await _reply(update, "Не удалось обработать. Попробуй ещё.")
+        return
+
+    # Show updated card
+    lines = [f"<b>{updated.get('title', '—')}</b>\n"]
+    if updated.get("assignee_name"):
+        lines.append(f"Исполнитель: {updated['assignee_name']}")
+    lines.append(f"Приоритет: P{updated.get('priority', 2)}")
+    if updated.get("is_bug"):
+        lines.append("Баг")
+    if updated.get("due_date"):
+        lines.append(f"Дедлайн: {updated['due_date']}")
+    if updated.get("project_name"):
+        lines.append(f"Проект: {updated['project_name']}")
+    if updated.get("status"):
+        lines.append(f"Этап: {updated['status']}")
+    lines.append("\nПрикрепить файлы?")
+    await _reply(update, "\n".join(lines),
+        InlineKeyboardMarkup([
+            [InlineKeyboardButton("Да", callback_data="files_yes"),
+             InlineKeyboardButton("Нет, создать", callback_data="files_no")]]))
+
+
 # ── Execute task creation ──
 
 async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -541,6 +596,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("editing_batch"):
         await _handle_approval_edit(update, context)
         return
+
+    # Editing pending task card (before creation)
+    if context.user_data.get("pending_task"):
+        text = (update.message.text or "").strip()
+        if text and text not in ("Мои задачи", "Просрочки", "Задать задачу", "Спросить по задачам", "Инструкции"):
+            await _edit_pending_task(update, context, text)
+            return
 
     text = (update.message.text or "").strip()
 
@@ -667,6 +729,27 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await _reply(update, f"Распознано: {text}")
                 update.message.text = text
                 await _handle_approval_edit(update, context)
+            else:
+                await _reply(update, "Не распознано. Попробуй текстом.")
+            return
+
+    # Voice while pending task card is shown — edit the pending task
+    if context.user_data.get("pending_task"):
+        voice = update.message.voice or update.message.audio
+        if voice:
+            file = await voice.get_file()
+            tmp = tempfile.NamedTemporaryFile(suffix=".ogg", delete=False)
+            tmp.close()
+            await file.download_to_drive(tmp.name)
+            await _reply(update, "Распознаю...")
+            text = await transcribe_voice(tmp.name)
+            try:
+                os.remove(tmp.name)
+            except OSError:
+                pass
+            if text:
+                await _reply(update, f"Распознано: {text}")
+                await _edit_pending_task(update, context, text)
             else:
                 await _reply(update, "Не распознано. Попробуй текстом.")
             return
