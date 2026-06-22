@@ -50,14 +50,15 @@ WEB URL: {context_data.get('web_base_url', '')}
 {{"action": "clarify", "message": "вопрос"}}
 
 2. ОТВЕТИТЬ на вопрос о задачах:
-{{"action": "answer", "message": "ответ"}}
+{{"action": "answer", "message": "ответ в HTML формате"}}
 
 Ты видишь ВСЕ задачи всех сотрудников. Можешь отвечать:
 - «Какие задачи у Амира?» — фильтруй по assignee
 - «Какие задачи у CEO?» — найди пользователя с position=CEO, покажи его задачи
 - «Что просрочено?» — задачи с due_date < сегодня и статус не done/approved
 - «Какие баги?» — is_bug=true
-- В ответе ВСЕГДА включай ссылки на задачи из поля link
+- Ссылки ВСЕГДА форматируй как HTML: <a href="URL">Открыть задачу</a>
+- НЕ вставляй raw URL. Только <a href="...">текст</a>
 
 3. ИЗМЕНИТЬ задачу:
 {{"action": "update_task", "task_id": число, "changes": {{"status": "...", "priority": ..., "assignee_name": "...", ...}}}}
