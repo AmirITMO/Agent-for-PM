@@ -852,11 +852,149 @@ async def _collect_file(update, context):
             [InlineKeyboardButton("Готово", callback_data="files_done")]]))
 
 
+BOT_USERNAME = "projectmanageraiibot"
+
+# Group sessions: {(chat_id, user_id): {"active": bool, "history": []}}
+_group_sessions: dict[tuple[int, int], dict] = {}
+
+
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle messages in group chats. React only to @bot mentions and follow-ups."""
+    if not update.message or not update.message.text:
+        return
+    if update.effective_chat.type not in ("group", "supergroup"):
+        return
+
+    text = update.message.text
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    key = (chat_id, user_id)
+
+    mentioned = f"@{BOT_USERNAME}" in text.lower()
+
+    if mentioned:
+        clean_text = text.replace(f"@{BOT_USERNAME}", "").replace(f"@{BOT_USERNAME.lower()}", "").strip()
+        _group_sessions[key] = {"active": True, "history": []}
+        if clean_text:
+            await _process_group_smart(update, context, clean_text, key)
+        else:
+            await update.message.reply_text("Слушаю. Опиши задачу или спроси о задачах.")
+        return
+
+    session_data = _group_sessions.get(key)
+    if not session_data or not session_data["active"]:
+        return
+
+    await _process_group_smart(update, context, text, key)
+
+
+async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                text: str, key: tuple[int, int]):
+    """Process group message through smart assistant."""
+    from agent3_pm.task_agent import smart_assistant
+
+    async with AsyncSessionLocal() as session:
+        user = await get_user_by_telegram_id(session, update.effective_user.id)
+        if not user:
+            await update.message.reply_text(
+                "Ты не зарегистрирован. Напиши мне в личку /start.")
+            _group_sessions.pop(key, None)
+            return
+
+        ctx_data = await _get_context_data(session, user)
+        history = _group_sessions[key].get("history", [])
+
+        result = await smart_assistant(text, ctx_data, history)
+
+        history.append({"role": "user", "content": text})
+        history.append({"role": "assistant", "content": json.dumps(result, ensure_ascii=False)})
+        if len(history) > 10:
+            history = history[-10:]
+        _group_sessions[key]["history"] = history
+
+        action = result.get("action", "answer")
+
+        if action == "clarify":
+            await update.message.reply_text(result.get("message", "Уточни."))
+
+        elif action == "answer":
+            await update.message.reply_text(result.get("message", ""))
+
+        elif action == "create_task":
+            td = result
+            assignee_id = None
+            if td.get("assignee_name"):
+                users = await get_all_users(session)
+                match = _fuzzy_match_user(td["assignee_name"], users)
+                if match:
+                    assignee_id = match.id
+
+            project_id = None
+            if td.get("project_name"):
+                proj = await get_project_by_name(session, td["project_name"])
+                if proj:
+                    project_id = proj.id
+
+            import datetime as dt
+            due_date = None
+            if td.get("due_date"):
+                try:
+                    due_date = dt.date.fromisoformat(str(td["due_date"])[:10])
+                except (ValueError, TypeError):
+                    pass
+
+            status = TaskStatus.BACKLOG
+            if td.get("status"):
+                try:
+                    status = TaskStatus(td["status"])
+                except ValueError:
+                    pass
+
+            task = await create_task(
+                session, title=td.get("title", "Без названия"),
+                description=td.get("description"), project_id=project_id,
+                priority=int(td.get("priority", 2)),
+                is_bug=bool(td.get("is_bug", False)),
+                assignee_id=assignee_id, creator_id=user.id,
+                due_date=due_date, status=status,
+            )
+
+            base = config.WEB_BASE_URL.rstrip("/")
+            await update.message.reply_text(
+                f"Задача создана: {task.title}\n{base}/task/{task.id}")
+
+            # Notify assignee in DM
+            if assignee_id:
+                from agent3_pm.repository import get_task_by_id
+                task = await get_task_by_id(session, task.id)
+                if task and task.assignee and task.assignee.telegram_id:
+                    from telegram import Bot
+                    try:
+                        bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
+                        notify = (f"Тебе назначена задача от {user.name}\n\n"
+                                  f"{task.title}\nP{task.priority}\n{base}/task/{task.id}")
+                        await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify)
+                    except Exception:
+                        pass
+
+            _group_sessions[key]["active"] = False
+
+        elif action == "update_task":
+            await update.message.reply_text("Управление задачами в группе — используй личку бота.")
+            _group_sessions[key]["active"] = False
+
+        else:
+            _group_sessions[key]["active"] = False
+
+
 def create_bot_application() -> Application:
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_message))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_file))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
     return app
