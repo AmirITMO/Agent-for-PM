@@ -95,7 +95,9 @@ async def _get_context_data(session, user) -> dict:
     """Build context for the smart assistant."""
     projects = await get_all_projects(session)
     users = await get_all_users(session)
+    from agent3_pm.models import ACTIVE_STATUSES
     all_tasks = await get_all_tasks(session)
+    active_tasks = [t for t in all_tasks if t.status in ACTIVE_STATUSES]
     base_url = config.WEB_BASE_URL.rstrip("/")
 
     def _task_dict(t):
@@ -113,7 +115,7 @@ async def _get_context_data(session, user) -> dict:
         "projects": [{"id": p.id, "name": p.name} for p in projects],
         "users": [{"id": u.id, "name": u.name, "position": u.position} for u in users],
         "current_user": {"id": user.id, "name": user.name, "position": user.position},
-        "all_tasks": [_task_dict(t) for t in all_tasks],
+        "all_tasks": [_task_dict(t) for t in active_tasks],
         "web_base_url": base_url,
     }
 
