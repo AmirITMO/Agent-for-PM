@@ -1006,7 +1006,31 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                 await update.message.reply_text("Управление задачами в группе — используй личку бота.")
                 _group_sessions[key]["active"] = False
 
+            elif action == "set_reminder":
+                delay = int(result.get("delay_minutes", 30))
+                msg = result.get("message", "Напоминание")
+                chat_id = update.effective_user.id
+                import asyncio
+
+                async def _send_group_reminder():
+                    from telegram import Bot
+                    try:
+                        bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
+                        await bot_inst.send_message(chat_id=chat_id, text=f"Напоминание:\n{msg}")
+                    except Exception:
+                        pass
+
+                loop = asyncio.get_event_loop()
+                loop.call_later(delay * 60, lambda: asyncio.ensure_future(_send_group_reminder()))
+                await update.message.reply_text(f"Напомню через {delay} мин.")
+                _group_sessions[key]["active"] = False
+
+            elif action == "delete_task":
+                await update.message.reply_text("Удаление задач — используй личку бота.")
+                _group_sessions[key]["active"] = False
+
             else:
+                await update.message.reply_text("Готово.")
                 _group_sessions[key]["active"] = False
 
     except Exception:
