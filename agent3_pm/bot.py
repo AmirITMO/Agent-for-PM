@@ -84,11 +84,23 @@ def _positions_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _clean_html(text: str) -> str:
+    """Remove HTML tags not supported by Telegram (only b, i, a, code, pre allowed)."""
+    import re
+    text = re.sub(r'</?(?!b|/b|i|/i|a|/a|code|/code|pre|/pre)[^>]+>', '', text)
+    return text
+
+
 async def _reply(update: Update, text: str, reply_markup=None):
     msg = update.message or (update.callback_query and update.callback_query.message)
     if msg:
-        await msg.reply_text(text, parse_mode=ParseMode.HTML,
-                             reply_markup=reply_markup, disable_web_page_preview=True)
+        clean = _clean_html(text)
+        try:
+            await msg.reply_text(clean, parse_mode=ParseMode.HTML,
+                                 reply_markup=reply_markup, disable_web_page_preview=True)
+        except Exception:
+            await msg.reply_text(clean, reply_markup=reply_markup,
+                                 disable_web_page_preview=True)
 
 
 async def _get_context_data(session, user) -> dict:
