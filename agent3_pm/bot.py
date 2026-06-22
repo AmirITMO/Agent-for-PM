@@ -217,6 +217,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user:
                 await _process_smart(update, context, status, session, user)
 
+    elif data.startswith("pick_prio_"):
+        await query.answer()
+        prio = data.replace("pick_prio_", "")
+        async with AsyncSessionLocal() as session:
+            user = await get_user_by_telegram_id(session, update.effective_user.id)
+            if user:
+                await _process_smart(update, context, f"P{prio}", session, user)
+
     # ── KB approval flow ──
     elif data.startswith("approve_take_"):
         await query.answer()
@@ -828,6 +836,15 @@ async def _process_smart(update, context, text, session, user):
                  InlineKeyboardButton("К выполнению", callback_data="pick_status_todo")],
                 [InlineKeyboardButton("В работе", callback_data="pick_status_wip"),
                  InlineKeyboardButton("Планирование", callback_data="pick_status_planning")],
+            ]
+            await _reply(update, msg, InlineKeyboardMarkup(buttons))
+        # If asking about priority — show priority buttons
+        elif "приоритет" in msg_lower or "priority" in msg_lower or "важност" in msg_lower:
+            buttons = [
+                [InlineKeyboardButton("P0 — срочно", callback_data="pick_prio_0"),
+                 InlineKeyboardButton("P1 — высокий", callback_data="pick_prio_1")],
+                [InlineKeyboardButton("P2 — обычный", callback_data="pick_prio_2"),
+                 InlineKeyboardButton("P3 — низкий", callback_data="pick_prio_3")],
             ]
             await _reply(update, msg, InlineKeyboardMarkup(buttons))
         else:
