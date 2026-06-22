@@ -34,6 +34,14 @@ def _enter_url(user_id: int) -> str:
     return f"{config.WEB_BASE_URL.rstrip('/')}/enter/{user_id}"
 
 
+def _link_board(user_id: int) -> str:
+    return f'<a href="{config.WEB_BASE_URL.rstrip("/")}/enter/{user_id}">Открыть трекер</a>'
+
+
+def _link_task(task_id: int, label: str = "Открыть задачу") -> str:
+    return f'<a href="{config.WEB_BASE_URL.rstrip("/")}/task/{task_id}">{label}</a>'
+
+
 def _fuzzy_match_user(name: str, users: list):
     name_lower = name.lower().strip()
     for u in users:
@@ -113,7 +121,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = await get_user_by_telegram_id(session, update.effective_user.id)
     if user:
         pos = f" ({user.position})" if user.position else ""
-        await _reply(update, f"Привет, {user.name}{pos}!\n\n{_enter_url(user.id)}", _menu_kb())
+        await _reply(update, f"Привет, {user.name}{pos}!\n\n{_link_board(user.id)}", _menu_kb())
         return
     await update.message.reply_text(
         "Привет! Это трекер задач MarketAI.\nЧтобы начать — зарегистрируйся.",
@@ -138,7 +146,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if existing and not existing.telegram_id:
                     await bind_telegram_id(session, existing.id, update.effective_user.id)
                     await query.message.reply_text(f"Аккаунт найден: {existing.name}")
-                    await _reply(update, f"{_enter_url(existing.id)}", _menu_kb())
+                    await _reply(update, f"{_link_board(existing.id)}", _menu_kb())
                     return
         context.user_data["reg_step"] = "name"
         await query.message.reply_text("Как тебя зовут? Напиши имя и фамилию.")
@@ -157,7 +165,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        telegram_username=username, name=name, position=position)
         context.user_data.clear()
         await query.message.reply_text(f"Зарегистрирован: {user.name} ({position})")
-        await _reply(update, f"{_enter_url(user.id)}", _menu_kb())
+        await _reply(update, f"{_link_board(user.id)}", _menu_kb())
 
     elif data == "files_yes":
         await query.answer()
@@ -334,10 +342,9 @@ async def _finalize_approval(message, context, batch_id: str, batch: dict):
                     from telegram import Bot
                     try:
                         bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
-                        base = config.WEB_BASE_URL.rstrip("/")
                         text = (f"Тебе назначена задача\n\n{task.title}\n"
-                                f"P{task.priority}\n{base}/task/{task.id}")
-                        await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=text)
+                                f"P{task.priority}\n{_link_task(task.id)}")
+                        await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=text, parse_mode="HTML")
                     except Exception:
                         pass
 
@@ -500,7 +507,7 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
                     base = config.WEB_BASE_URL.rstrip("/")
                     notify_text = (f"Тебе назначена задача от {user.name if user else '—'}\n\n"
-                                   f"{task.title}\nP{task.priority}\n{base}/task/{task.id}")
+                                   f"{task.title}\nP{task.priority}\n{_link_task(task.id)}")
                     await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify_text)
                 except Exception:
                     pass
@@ -509,8 +516,7 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("pending_files", None)
     context.user_data.pop("waiting_files", None)
 
-    web = f"{config.WEB_BASE_URL.rstrip('/')}/task/{task.id}"
-    await _reply(update, f"Задача создана: <b>{task.title}</b>\n{web}", _menu_kb())
+    await _reply(update, f"Задача создана: <b>{task.title}</b>\n{_link_task(task.id)}", _menu_kb())
 
 
 # ── Main handler ──
@@ -554,9 +560,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines = [f"<b>Твои задачи ({len(active)}):</b>\n"]
                 for t in active:
                     p = t.project.name if t.project else "—"
-                    lines.append(f"{'[Баг] ' if t.is_bug else ''}P{t.priority} {t.title} ({p}) {base}/task/{t.id}")
+                    lines.append(f"{'[Баг] ' if t.is_bug else ''}P{t.priority} {t.title} ({p}) {_link_task(t.id, 'ссылка')}")
                 reply = "\n".join(lines)
-            reply += f"\n\n{_enter_url(user.id)}"
+            reply += f"\n\n{_link_board(user.id)}"
             await _reply(update, reply, _menu_kb())
             return
 
@@ -602,7 +608,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "- Баги из GitHub автоматически на канбане\n\n"
 
                 "<b>Веб-трекер:</b>\n"
-                f"{_enter_url(user.id)}\n"
+                f"{_link_board(user.id)}\n"
                 "Канбан по проектам, редактирование, комментарии,\n"
                 "файлы, удаление, кнопка «Выполнено»."
             )
@@ -613,7 +619,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             overdue = await get_overdue_tasks(session, user_id=user.id)
             hot = await get_hot_tasks(session, 48, user_id=user.id)
             bugs = await get_user_bugs(session, user.id)
-            reply = format_overdue_block(overdue, hot, bugs) + f"\n\n{_enter_url(user.id)}"
+            reply = format_overdue_block(overdue, hot, bugs) + f"\n\n{_link_board(user.id)}"
             await _reply(update, reply, _menu_kb())
             return
 
@@ -806,8 +812,7 @@ async def _process_smart(update, context, text, session, user):
             return
 
         await update_task(session, task.id, **changes)
-        web = f"{config.WEB_BASE_URL.rstrip('/')}/task/{task.id}"
-        await _reply(update, f"Обновлено: <b>{task.title}</b>\n{web}")
+        await _reply(update, f"Обновлено: <b>{task.title}</b>\n{_link_task(task.id)}")
 
     elif action == "delete_task":
         task_id = result.get("task_id")
@@ -983,9 +988,8 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                     due_date=due_date, status=status,
                 )
 
-                base = config.WEB_BASE_URL.rstrip("/")
                 await update.message.reply_text(
-                    f"Задача создана: {task.title}\n{base}/task/{task.id}")
+                    f"Задача создана: {task.title}\n{_link_task(task.id)}", parse_mode="HTML")
 
                 if assignee_id:
                     from agent3_pm.repository import get_task_by_id
@@ -995,7 +999,7 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                         try:
                             bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
                             notify = (f"Тебе назначена задача от {user.name}\n\n"
-                                      f"{task.title}\nP{task.priority}\n{base}/task/{task.id}")
+                                      f"{task.title}\nP{task.priority}\n{_link_task(task.id)}")
                             await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify)
                         except Exception:
                             pass
