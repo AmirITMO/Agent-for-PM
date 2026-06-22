@@ -203,6 +203,206 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user:
                 await _process_smart(update, context, status, session, user)
 
+    # ── KB approval flow ──
+    elif data.startswith("approve_take_"):
+        await query.answer()
+        batch_id = data.replace("approve_take_", "")
+        from agent3_pm.kb_watcher import get_batch
+        batch = get_batch(batch_id)
+        if not batch:
+            await query.message.reply_text("Этот пакет задач уже обработан.")
+            return
+        if batch["locked_by"] is not None:
+            await query.message.reply_text("Задачи уже взял другой сотрудник.")
+            return
+        batch["locked_by"] = update.effective_user.id
+        batch["current_idx"] = 0
+        context.user_data["approval_batch"] = batch_id
+        await _send_approval_card(query.message, batch_id, batch)
+
+    elif data.startswith("approve_ok_"):
+        await query.answer()
+        batch_id = data.replace("approve_ok_", "")
+        from agent3_pm.kb_watcher import get_batch
+        batch = get_batch(batch_id)
+        if not batch or batch["locked_by"] != update.effective_user.id:
+            return
+        batch["current_idx"] += 1
+        if batch["current_idx"] >= len(batch["tasks"]):
+            await _finalize_approval(query.message, context, batch_id, batch)
+        else:
+            await _send_approval_card(query.message, batch_id, batch)
+
+    elif data.startswith("approve_edit_"):
+        await query.answer()
+        batch_id = data.replace("approve_edit_", "")
+        context.user_data["editing_batch"] = batch_id
+        await query.message.reply_text("Опиши изменения текстом или голосовым.")
+
+
+# ── KB Approval helpers ──
+
+async def _send_approval_card(message, batch_id: str, batch: dict):
+    """Send current task card for approval."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    idx = batch["current_idx"]
+    task = batch["tasks"][idx]
+    total = len(batch["tasks"])
+
+    lines = [f"<b>Задача {idx + 1}/{total}</b>\n"]
+    lines.append(f"<b>{task.get('title', '—')}</b>\n")
+    if task.get("description"):
+        lines.append(f"{task['description']}\n")
+    lines.append(f"Исполнитель: {task.get('assignee_name') or 'не назначен'}")
+    lines.append(f"Приоритет: P{task.get('priority', 2)}")
+    if task.get("is_bug"):
+        lines.append("Тип: Баг")
+    if task.get("due_date"):
+        lines.append(f"Дедлайн: {task['due_date']}")
+    lines.append(f"Проект: {task.get('project_name') or 'не указан'}")
+    lines.append(f"Этап: {task.get('status') or 'не указан'}")
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Редактировать", callback_data=f"approve_edit_{batch_id}"),
+         InlineKeyboardButton("Утвердить", callback_data=f"approve_ok_{batch_id}")],
+    ])
+    await message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+
+
+async def _finalize_approval(message, context, batch_id: str, batch: dict):
+    """All tasks approved — create on kanban and notify assignees."""
+    from agent3_pm.kb_watcher import remove_batch
+    created = 0
+
+    async with AsyncSessionLocal() as session:
+        user = await get_user_by_telegram_id(session, batch["locked_by"])
+        all_users = await get_all_users(session)
+
+        for td in batch["tasks"]:
+            assignee_id = None
+            if td.get("assignee_name"):
+                match = _fuzzy_match_user(td["assignee_name"], all_users)
+                if match:
+                    assignee_id = match.id
+
+            project_id = None
+            if td.get("project_name"):
+                proj = await get_project_by_name(session, td["project_name"])
+                if proj:
+                    project_id = proj.id
+
+            import datetime as dt
+            due_date = None
+            if td.get("due_date"):
+                try:
+                    due_date = dt.date.fromisoformat(str(td["due_date"])[:10])
+                except (ValueError, TypeError):
+                    pass
+
+            status = TaskStatus.BACKLOG
+            if td.get("status"):
+                try:
+                    status = TaskStatus(td["status"])
+                except ValueError:
+                    pass
+
+            task = await create_task(
+                session, title=td.get("title", "Без названия"),
+                description=td.get("description"),
+                project_id=project_id,
+                priority=int(td.get("priority", 2)),
+                is_bug=bool(td.get("is_bug", False)),
+                assignee_id=assignee_id,
+                creator_id=user.id if user else None,
+                due_date=due_date, status=status,
+            )
+
+            # Add source link as comment
+            source_url = td.get("_source_url")
+            if source_url:
+                await add_comment(session, task.id, None, f"Источник: {source_url}")
+
+            # Notify assignee
+            if assignee_id:
+                task = await repo_get_task(session, task.id)
+                if task and task.assignee and task.assignee.telegram_id:
+                    from telegram import Bot
+                    try:
+                        bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
+                        base = config.WEB_BASE_URL.rstrip("/")
+                        text = (f"Тебе назначена задача\n\n{task.title}\n"
+                                f"P{task.priority}\n{base}/task/{task.id}")
+                        await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=text)
+                    except Exception:
+                        pass
+
+            created += 1
+
+    remove_batch(batch_id)
+    context.user_data.pop("approval_batch", None)
+    context.user_data.pop("editing_batch", None)
+    await message.reply_text(f"Утверждено и создано {created} задач на канбане.", reply_markup=_menu_kb())
+
+
+async def repo_get_task(session, task_id):
+    from agent3_pm.repository import get_task_by_id
+    return await get_task_by_id(session, task_id)
+
+
+async def _handle_approval_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text/voice edit of a task during approval flow."""
+    from agent3_pm.kb_watcher import get_batch
+    from agent3_pm.task_agent import smart_assistant
+
+    batch_id = context.user_data.get("editing_batch")
+    batch = get_batch(batch_id)
+    if not batch:
+        context.user_data.pop("editing_batch", None)
+        await _reply(update, "Пакет задач уже обработан.", _menu_kb())
+        return
+
+    text = (update.message.text or "").strip()
+    if not text:
+        return
+
+    idx = batch["current_idx"]
+    task = batch["tasks"][idx]
+
+    # Use GPT to apply edits
+    edit_prompt = f"""Текущая задача:
+{json.dumps(task, ensure_ascii=False)}
+
+Пользователь просит изменить: {text}
+
+Верни обновлённый JSON задачи (тот же формат). Только JSON."""
+
+    try:
+        client = _get_client_openai()
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": edit_prompt}],
+            temperature=0, max_tokens=500,
+        )
+        raw = resp.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        updated = json.loads(raw)
+        updated["_source_url"] = task.get("_source_url")
+        batch["tasks"][idx] = updated
+    except Exception:
+        await _reply(update, "Не удалось обработать изменения. Попробуй ещё раз.")
+        return
+
+    context.user_data.pop("editing_batch", None)
+    await _send_approval_card(update.message, batch_id, batch)
+
+
+def _get_client_openai():
+    from agent3_pm.task_agent import _get_client
+    return _get_client()
+
 
 # ── Execute task creation ──
 
@@ -320,6 +520,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.user_data.get("waiting_files"):
         await _collect_file(update, context)
+        return
+
+    # KB approval editing
+    if context.user_data.get("editing_batch"):
+        await _handle_approval_edit(update, context)
         return
 
     text = (update.message.text or "").strip()
