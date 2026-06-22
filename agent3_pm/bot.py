@@ -35,11 +35,15 @@ def _enter_url(user_id: int) -> str:
 
 
 def _link_board(user_id: int) -> str:
-    return f'<a href="{config.WEB_BASE_URL.rstrip("/")}/enter/{user_id}">Открыть трекер</a>'
+    return f'<a href="{config.WEB_BASE_URL.rstrip("/")}/enter/{user_id}">Доска</a>'
 
 
 def _link_task(task_id: int, label: str = "Открыть задачу") -> str:
     return f'<a href="{config.WEB_BASE_URL.rstrip("/")}/task/{task_id}">{label}</a>'
+
+
+def _link_new_task(task_id: int) -> str:
+    return f'<a href="{config.WEB_BASE_URL.rstrip("/")}/task/{task_id}">Новая задача</a>'
 
 
 def _fuzzy_match_user(name: str, users: list):
@@ -508,7 +512,7 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     base = config.WEB_BASE_URL.rstrip("/")
                     notify_text = (f"Тебе назначена задача от {user.name if user else '—'}\n\n"
                                    f"{task.title}\nP{task.priority}\n{_link_task(task.id)}")
-                    await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify_text)
+                    await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify_text, parse_mode="HTML")
                 except Exception:
                     pass
 
@@ -516,7 +520,7 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("pending_files", None)
     context.user_data.pop("waiting_files", None)
 
-    await _reply(update, f"Задача создана: <b>{task.title}</b>\n{_link_task(task.id)}", _menu_kb())
+    await _reply(update, f"Задача создана: <b>{task.title}</b>\n{_link_new_task(task.id)}", _menu_kb())
 
 
 # ── Main handler ──
@@ -1000,7 +1004,7 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                             bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
                             notify = (f"Тебе назначена задача от {user.name}\n\n"
                                       f"{task.title}\nP{task.priority}\n{_link_task(task.id)}")
-                            await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify)
+                            await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify, parse_mode="HTML")
                         except Exception:
                             pass
 
