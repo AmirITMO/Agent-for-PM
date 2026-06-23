@@ -90,7 +90,13 @@ def _positions_kb() -> InlineKeyboardMarkup:
 def _clean_html(text: str) -> str:
     """Remove HTML tags not supported by Telegram (only b, i, a, code, pre allowed)."""
     import re
+    # Блочные теги → перенос строки (Telegram HTML не поддерживает <br>/<p>/<li>)
+    text = re.sub(r'<\s*br\s*/?>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</\s*(p|li|div|tr)\s*>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'<\s*li\s*>', '• ', text, flags=re.IGNORECASE)
     text = re.sub(r'</?(?!b|/b|i|/i|a|/a|code|/code|pre|/pre)[^>]+>', '', text)
+    # Схлопываем 3+ переносов
+    text = re.sub(r'\n{3,}', '\n\n', text)
     return text
 
 
@@ -110,9 +116,9 @@ async def _get_context_data(session, user) -> dict:
     """Build context for the smart assistant."""
     projects = await get_all_projects(session)
     users = await get_all_users(session)
-    from agent3_pm.models import ACTIVE_STATUSES
+    # ВСЕ незаархивированные задачи (включая done/approved/hold), чтобы агент
+    # отвечал полно и удалял/менял любые задачи с канбана.
     all_tasks = await get_all_tasks(session)
-    active_tasks = [t for t in all_tasks if t.status in ACTIVE_STATUSES]
     base_url = config.WEB_BASE_URL.rstrip("/")
 
     def _task_dict(t):
@@ -130,7 +136,7 @@ async def _get_context_data(session, user) -> dict:
         "projects": [{"id": p.id, "name": p.name} for p in projects],
         "users": [{"id": u.id, "name": u.name, "position": u.position} for u in users],
         "current_user": {"id": user.id, "name": user.name, "position": user.position},
-        "all_tasks": [_task_dict(t) for t in active_tasks],
+        "all_tasks": [_task_dict(t) for t in all_tasks],
         "web_base_url": base_url,
     }
 
@@ -482,6 +488,8 @@ async def _edit_pending_task(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     # Show updated card
     lines = [f"<b>{updated.get('title', '—')}</b>\n"]
+    if updated.get("description"):
+        lines.append(f"{updated['description']}\n")
     if updated.get("assignee_name"):
         lines.append(f"Исполнитель: {updated['assignee_name']}")
     lines.append(f"Приоритет: P{updated.get('priority', 2)}")
@@ -581,6 +589,8 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except OSError:
                     pass
 
+        logger.info(f"Task created: {task.title}, assignee_id={assignee_id}, project_id={project_id}")
+
         # Notify assignee
         if assignee_id and assignee_id != (user.id if user else None):
             from agent3_pm.repository import get_task_by_id as _get_task
@@ -644,7 +654,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text == "Мои задачи":
             all_my = await get_all_tasks(session, assignee_id=user.id)
             from agent3_pm.models import ACTIVE_STATUSES
-            active = [t for t in all_my if t.status in ACTIVE_STATUSES]
+            active = [t for t in all_my if t.status in ACTIVE_STATUSES and not t.archived_at]
             if not active:
                 reply = "У тебя нет активных задач."
             else:
@@ -875,6 +885,8 @@ async def _process_smart(update, context, text, session, user):
         context.user_data["pending_files"] = []
 
         lines = [f"<b>{result.get('title', '—')}</b>\n"]
+        if result.get("description"):
+            lines.append(f"{result['description']}\n")
         if result.get("assignee_name"):
             lines.append(f"Исполнитель: {result['assignee_name']}")
         lines.append(f"Приоритет: P{result.get('priority', 2)}")
@@ -896,11 +908,12 @@ async def _process_smart(update, context, text, session, user):
         task_id = result.get("task_id")
         changes = result.get("changes", {})
 
-        if not task_id:
+        active_ids = {t["id"] for t in ctx_data.get("all_tasks", [])}
+        if not task_id or task_id not in active_ids:
             title = result.get("task_title", "")
             tasks = await search_tasks_by_title(session, title, limit=1)
             if not tasks:
-                await _reply(update, f"Задача «{title}» не найдена.")
+                await _reply(update, "Такой задачи нет на канбане.")
                 return
             task_id = tasks[0].id
 
@@ -936,9 +949,25 @@ async def _process_smart(update, context, text, session, user):
         await update_task(session, task.id, **changes)
         await _reply(update, f"Обновлено: <b>{task.title}</b>\n{_link_task(task.id, user_id=user.id)}")
 
+    elif action == "delete_tasks":
+        from agent3_pm.repository import get_task_by_id, delete_task as del_task
+        active_ids = {t["id"] for t in ctx_data.get("all_tasks", [])}
+        ids = [i for i in (result.get("task_ids") or []) if i in active_ids]
+        if not ids:
+            await _reply(update, "Таких задач нет на канбане.")
+            return
+        deleted = 0
+        for tid in ids:
+            task = await get_task_by_id(session, tid)
+            if task:
+                await del_task(session, tid)
+                deleted += 1
+        await _reply(update, f"Удалено задач: {deleted}.")
+
     elif action == "delete_task":
         task_id = result.get("task_id")
-        if task_id:
+        active_ids = {t["id"] for t in ctx_data.get("all_tasks", [])}
+        if task_id and task_id in active_ids:
             from agent3_pm.repository import get_task_by_id, delete_task as del_task
             task = await get_task_by_id(session, task_id)
             if task:
