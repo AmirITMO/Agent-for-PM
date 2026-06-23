@@ -127,6 +127,14 @@ _QUALIFIERS = (
 _NOT_NAMES = {"кого", "него", "неё", "нее", "них", "кому", "всех", "каждого", "меня", "себя", "тебя", "кто"}
 
 
+# Глаголы создания/изменения — это НЕ запрос списка, отдаём GPT
+_CREATE_VERBS = (
+    "задай", "задать", "поставь", "постав", "создай", "создать", "создаём", "создаем",
+    "добавь", "добав", "новая задача", "новую задачу", "сделай задачу", "напомни",
+    "перенеси", "перемести", "измени", "помен", "назначь", "отметь",
+)
+
+
 def _task_intent(text: str, users: list):
     """Detect ('list'|'delete', user) ТОЛЬКО для простых 'задачи у X' / 'удали задачи X'.
     Любой нюанс (фильтры, статусы, 'кроме', 'по сайту') → (None, None), пусть решает GPT."""
@@ -136,10 +144,13 @@ def _task_intent(text: str, users: list):
         return (None, None)
     if any(w in low for w in ("просроч", "баг", "сколько", "мои задач")):
         return (None, None)
+    # команда создания/изменения задачи — не наш кейс списка
+    is_delete = any(w in low for w in ("удали", "удал", "снеси", "убери", "почист"))
+    if not is_delete and any(v in low for v in _CREATE_VERBS):
+        return (None, None)
     # есть уточнения — не наш простой кейс
     if any(q in low for q in _QUALIFIERS):
         return (None, None)
-    is_delete = any(w in low for w in ("удали", "удал", "снеси", "убери", "почист"))
     m = re.search(r"\bу\s+([а-яёa-zA-Z]{3,})", low) or re.search(r"задач[аиу]?\s+([а-яёa-zA-Z]{3,})\b", low)
     if not m:
         return (None, None)
