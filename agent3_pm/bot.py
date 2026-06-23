@@ -886,11 +886,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _reply(update, reply, _menu_kb())
             return
 
-        # Smart assistant mode
-        if text in ("Задать задачу", "Спросить по задачам"):
-            context.user_data["chat_mode"] = True
+        # Smart assistant mode — ЖЁСТКОЕ разделение по кнопкам
+        if text == "Задать задачу":
+            context.user_data["chat_mode"] = "create"
             context.user_data["chat_history"] = []
-            await _reply(update, "Слушаю. Опиши что нужно сделать или спроси о задачах.")
+            await _reply(update, "Опиши задачу — текстом или голосом. Уточню доску и этап, покажу карточку.")
+            return
+        if text == "Спросить по задачам":
+            context.user_data["chat_mode"] = "ask"
+            context.user_data["chat_history"] = []
+            await _reply(update, "Спрашивай по задачам или командуй: показать, перенести на этап, удалить, напомнить.")
             return
 
         if not context.user_data.get("chat_mode"):
@@ -982,36 +987,36 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _process_smart(update, context, text, session, user):
     """Send message to smart assistant and handle the action."""
+    mode = context.user_data.get("chat_mode", "ask")
     ctx_data = await _get_context_data(session, user)
 
-    # Детерминированный отчёт по всем сотрудникам — без GPT, чистый формат.
-    if _is_team_report(text):
-        await _send_team_report(update, session, user)
-        return
-
-    # Детерминированная обработка «какие задачи у X» и «удали все задачи X» —
-    # без GPT, гарантированно правильная фильтрация по исполнителю.
-    all_users = await get_all_users(session)
-    intent, target = _task_intent(text, all_users)
-    if target and intent == "list":
-        await _reply(update, await _format_user_tasks(session, target, user))
-        return
-    if target and intent == "delete":
-        tasks = [t for t in await get_all_tasks(session, assignee_id=target.id) if not t.archived_at]
-        if not tasks:
-            await _reply(update, f"У {target.name} нет задач для удаления.")
+    # Детерминированные перехватчики (отчёт/список/удаление) — ТОЛЬКО в режиме «Спросить».
+    # В режиме «Задать задачу» ничего не перехватываем — всё идёт на создание.
+    if mode == "ask":
+        if _is_team_report(text):
+            await _send_team_report(update, session, user)
             return
-        from agent3_pm.repository import delete_task as del_task
-        n = 0
-        for t in list(tasks):
-            if await del_task(session, t.id):
-                n += 1
-        await _reply(update, f"Удалено задач у {target.name}: {n}.")
-        return
+        all_users = await get_all_users(session)
+        intent, target = _task_intent(text, all_users)
+        if target and intent == "list":
+            await _reply(update, await _format_user_tasks(session, target, user))
+            return
+        if target and intent == "delete":
+            tasks = [t for t in await get_all_tasks(session, assignee_id=target.id) if not t.archived_at]
+            if not tasks:
+                await _reply(update, f"У {target.name} нет задач для удаления.")
+                return
+            from agent3_pm.repository import delete_task as del_task
+            n = 0
+            for t in list(tasks):
+                if await del_task(session, t.id):
+                    n += 1
+            await _reply(update, f"Удалено задач у {target.name}: {n}.")
+            return
 
     history = context.user_data.get("chat_history", [])
 
-    result = await smart_assistant(text, ctx_data, history)
+    result = await smart_assistant(text, ctx_data, history, mode=mode)
 
     # Save to history
     history.append({"role": "user", "content": text})

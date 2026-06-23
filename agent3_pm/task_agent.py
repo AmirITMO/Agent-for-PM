@@ -122,11 +122,28 @@ backlog→planning, planning→todo, todo→wip, wip→done, done→approved
 - Если упомянут исполнитель по имени — ищи в списке СОТРУДНИКОВ. Имена могут быть неточными: «Амиру» = «Амир Хайруллин», «Мише» = ищи Михаила"""
 
 
+_MODE_CREATE = """
+
+=== РЕЖИМ: СОЗДАНИЕ ЗАДАЧИ ===
+Пользователь нажал кнопку «Задать задачу». Его сообщение — это ОПИСАНИЕ НОВОЙ ЗАДАЧИ.
+Верни ТОЛЬКО create_task (или clarify, если не хватает доски/этапа/приоритета).
+СТРОГО ЗАПРЕЩЕНО возвращать answer, update_task, delete_task, set_reminder.
+Даже если текст похож на вопрос или начинается с «задай задачу X:» — это создание задачи."""
+
+_MODE_ASK = """
+
+=== РЕЖИМ: ВОПРОСЫ И УПРАВЛЕНИЕ ===
+Пользователь нажал кнопку «Спросить по задачам». Доступно: answer, update_task, delete_task, set_reminder.
+СОЗДАВАТЬ задачи ЗАПРЕЩЕНО (create_task нельзя). Если просят создать задачу — верни answer: «Чтобы создать задачу, нажми кнопку „Задать задачу“»."""
+
+
 async def smart_assistant(user_message: str, context_data: dict,
-                          history: list[dict] | None = None) -> dict:
+                          history: list[dict] | None = None, mode: str = "ask") -> dict:
     try:
         client = _get_client()
-        messages = [{"role": "system", "content": _build_system_prompt(context_data)}]
+        system = _build_system_prompt(context_data)
+        system += _MODE_CREATE if mode == "create" else _MODE_ASK
+        messages = [{"role": "system", "content": system}]
         if history:
             messages.extend(history)
         messages.append({"role": "user", "content": user_message})
