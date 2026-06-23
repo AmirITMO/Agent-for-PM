@@ -183,7 +183,7 @@ class NotificationLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
+    task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True)
     notification_type = Column(String(50), nullable=False)
     sent_at = Column(DateTime, server_default=func.now())
 

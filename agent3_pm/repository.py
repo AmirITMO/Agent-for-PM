@@ -435,6 +435,10 @@ async def delete_task(session: AsyncSession, task_id: int) -> bool:
     task = await get_task_by_id(session, task_id)
     if not task:
         return False
+    # Удаляем notification_log вручную (FK без CASCADE в существующих БД)
+    await session.execute(
+        delete(NotificationLog).where(NotificationLog.task_id == task_id)
+    )
     await session.delete(task)
     await session.commit()
     return True

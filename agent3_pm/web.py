@@ -385,7 +385,13 @@ async def delete_task_api(task_id: int, request: Request,
                           session: AsyncSession = Depends(get_session)):
     form = await request.form()
     redirect = form.get("redirect", "/board")
-    await repo.delete_task(session, task_id)
+    if not redirect or redirect.startswith("http"):
+        redirect = "/board"
+    try:
+        await repo.delete_task(session, task_id)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(f"Failed to delete task {task_id}")
     return RedirectResponse(redirect, status_code=303)
 
 
