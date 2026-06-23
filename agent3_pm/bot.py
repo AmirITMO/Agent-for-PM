@@ -466,7 +466,7 @@ async def _send_approval_card(message, batch_id: str, batch: dict):
     if task.get("description"):
         lines.append(f"{task['description']}\n")
     lines.append(f"Исполнитель: {task.get('assignee_name') or 'не назначен'}")
-    lines.append(f"Приоритет: P{task.get('priority', 2)}")
+    lines.append(f"Приоритет: P{task.get('priority') if task.get('priority') is not None else DEFAULT_PRIORITY}")
     if task.get("is_bug"):
         lines.append("Тип: Баг")
     if task.get("due_date"):
@@ -656,7 +656,7 @@ async def _edit_pending_task(update: Update, context: ContextTypes.DEFAULT_TYPE,
         lines.append(f"{updated['description']}\n")
     if updated.get("assignee_name"):
         lines.append(f"Исполнитель: {updated['assignee_name']}")
-    lines.append(f"Приоритет: P{updated.get('priority', 2)}")
+    lines.append(f"Приоритет: P{updated.get('priority') if updated.get('priority') is not None else DEFAULT_PRIORITY}")
     if updated.get("is_bug"):
         lines.append("Баг")
     if updated.get("due_date"):
@@ -1076,6 +1076,9 @@ async def _process_smart(update, context, text, session, user):
         await _reply(update, msg)
 
     elif action == "create_task":
+        # Нормализуем priority: null/None → 2 (P2 по умолчанию)
+        if result.get("priority") is None:
+            result["priority"] = DEFAULT_PRIORITY
         context.user_data["pending_task"] = result
         context.user_data["pending_files"] = []
 
@@ -1084,7 +1087,7 @@ async def _process_smart(update, context, text, session, user):
             lines.append(f"{result['description']}\n")
         if result.get("assignee_name"):
             lines.append(f"Исполнитель: {result['assignee_name']}")
-        lines.append(f"Приоритет: P{result.get('priority', 2)}")
+        lines.append(f"Приоритет: P{result['priority']}")
         if result.get("is_bug"):
             lines.append("Баг")
         if result.get("due_date"):
