@@ -1245,9 +1245,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     mentioned = f"@{BOT_USERNAME.lower()}" in text_lower
 
     if mentioned:
-        import re
+        import re, time
         clean_text = re.sub(rf"@{BOT_USERNAME}", "", text, flags=re.IGNORECASE).strip()
-        _group_sessions[key] = {"active": True, "history": []}
+        _group_sessions[key] = {"active": True, "history": [], "ts": time.time()}
         if clean_text:
             await _process_group_smart(update, context, clean_text, key)
         else:
@@ -1257,6 +1257,13 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     session_data = _group_sessions.get(key)
     if not session_data or not session_data["active"]:
         return
+
+    # Таймаут: 5 минут без активности — сессия деактивируется
+    import time
+    if time.time() - session_data.get("ts", 0) > 300:
+        _group_sessions.pop(key, None)
+        return
+    session_data["ts"] = time.time()
 
     await _process_group_smart(update, context, text, key)
 
@@ -1294,6 +1301,7 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
 
             elif action == "answer":
                 await update.message.reply_text(result.get("message", ""))
+                _group_sessions[key]["active"] = False
 
             elif action == "create_task":
                 td = result
@@ -1397,8 +1405,10 @@ def create_bot_application() -> Application:
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_message))
-    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
-    app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_file))
+    app.add_handler(MessageHandler(
+        (filters.VOICE | filters.AUDIO) & filters.ChatType.PRIVATE, handle_voice))
+    app.add_handler(MessageHandler(
+        (filters.Document.ALL | filters.PHOTO) & filters.ChatType.PRIVATE, handle_file))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
     return app
