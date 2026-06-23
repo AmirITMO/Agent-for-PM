@@ -135,7 +135,8 @@ async def smart_assistant(user_message: str, context_data: dict,
             model="gpt-4o-mini",
             messages=messages,
             temperature=0,
-            max_tokens=1500,
+            max_tokens=2000,
+            response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content.strip()
         if raw.startswith("```"):
@@ -144,7 +145,16 @@ async def smart_assistant(user_message: str, context_data: dict,
                 raw = raw[4:]
         return json.loads(raw)
     except json.JSONDecodeError:
-        return {"action": "answer", "message": raw if 'raw' in dir() else "Ошибка обработки."}
+        # Невалидный JSON — пробуем достать message, НИКОГДА не показываем сырой JSON
+        try:
+            import re
+            m = re.search(r'"message"\s*:\s*"(.*)"\s*}?\s*$', raw, re.DOTALL)
+            if m:
+                msg = m.group(1).replace('\\n', '\n').replace('\\"', '"').replace('\\/', '/')
+                return {"action": "answer", "message": msg}
+        except Exception:
+            pass
+        return {"action": "answer", "message": "Не удалось обработать ответ. Попробуй переформулировать."}
     except Exception:
         logger.exception("Smart assistant failed")
         return {"action": "answer", "message": "Ошибка. Попробуй ещё раз."}

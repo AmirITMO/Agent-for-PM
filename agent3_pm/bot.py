@@ -152,6 +152,49 @@ def _task_intent(text: str, users: list):
     return ("delete" if is_delete else "list", target)
 
 
+def _is_team_report(text: str) -> bool:
+    low = text.lower()
+    if "задач" not in low and "отчет" not in low and "отчёт" not in low:
+        return False
+    return any(p in low for p in (
+        "отчет", "отчёт", "у кого", "все задачи всех", "задачи всех",
+        "у всех", "по всем", "каждого сотрудник", "по сотрудник", "кто чем занят",
+    ))
+
+
+async def _send_team_report(update, session, asker):
+    """Деттерминированный отчёт по всем сотрудникам: группировка, замаскированные ссылки, разбивка."""
+    users = await get_all_users(session)
+    base = config.WEB_BASE_URL.rstrip("/")
+    blocks = []
+    for u in sorted(users, key=lambda x: x.name):
+        tasks = [t for t in await get_all_tasks(session, assignee_id=u.id) if not t.archived_at]
+        if not tasks:
+            continue
+        lines = [f"<b>{u.name}</b> ({u.position or '—'}) — задач: {len(tasks)}"]
+        for t in tasks:
+            st = t.status.value if hasattr(t.status, "value") else t.status
+            bug = "[Баг] " if t.is_bug else ""
+            link = f'<a href="{base}/enter/{asker.id}?next=/task/{t.id}">открыть</a>'
+            lines.append(f"• {bug}{t.title} — {st} — {link}")
+        blocks.append("\n".join(lines))
+
+    if not blocks:
+        await _reply(update, "Ни у кого нет активных задач.")
+        return
+
+    # разбивка по лимиту Telegram (~4096), собираем блоки целиком
+    chunk, size = [], 0
+    for b in blocks:
+        if size + len(b) > 3500 and chunk:
+            await _reply(update, "\n\n".join(chunk))
+            chunk, size = [], 0
+        chunk.append(b)
+        size += len(b) + 2
+    if chunk:
+        await _reply(update, "\n\n".join(chunk))
+
+
 async def _format_user_tasks(session, target, asker) -> str:
     """Deterministic list of target's tasks (all statuses, non-archived) with auto-login links."""
     tasks = await get_all_tasks(session, assignee_id=target.id)
@@ -929,6 +972,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _process_smart(update, context, text, session, user):
     """Send message to smart assistant and handle the action."""
     ctx_data = await _get_context_data(session, user)
+
+    # Детерминированный отчёт по всем сотрудникам — без GPT, чистый формат.
+    if _is_team_report(text):
+        await _send_team_report(update, session, user)
+        return
 
     # Детерминированная обработка «какие задачи у X» и «удали все задачи X» —
     # без GPT, гарантированно правильная фильтрация по исполнителю.
