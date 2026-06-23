@@ -62,6 +62,53 @@ def _fuzzy_match_user(name: str, users: list):
     return None
 
 
+def _match_user_genitive(cand: str, users: list):
+    """Match a name possibly in genitive case (ромы→Роман, арсения→арсений) by stem."""
+    cand = cand.lower().strip(" ?.,!»«\"'")
+    if len(cand) < 3:
+        return None
+    exact = _fuzzy_match_user(cand, users)
+    if exact:
+        return exact
+    stem = cand[:3]
+    for u in users:
+        for w in u.name.lower().split():
+            if len(w) >= 3 and w[:3] == stem:
+                return u
+    return None
+
+
+def _assignee_question(text: str, users: list):
+    """If text is 'какие задачи у <name>' / 'задачи <name>' — return matched user, else None."""
+    import re
+    low = text.lower()
+    if "задач" not in low:
+        return None
+    # общие запросы — не перехватываем, пусть идёт в GPT
+    if any(w in low for w in ("просроч", "баг", "все задачи всех", "сколько", "мои задач")):
+        return None
+    m = re.search(r"\bу\s+([а-яёa-zA-Z]{3,})", low) or re.search(r"задач[аи]?\s+([а-яёa-zA-Z]{3,})\b", low)
+    if not m:
+        return None
+    return _match_user_genitive(m.group(1), users)
+
+
+async def _format_user_tasks(session, target, asker) -> str:
+    """Deterministic list of target's tasks (all statuses, non-archived) with auto-login links."""
+    tasks = await get_all_tasks(session, assignee_id=target.id)
+    tasks = [t for t in tasks if not t.archived_at]
+    if not tasks:
+        return f"У {target.name} нет задач."
+    base = config.WEB_BASE_URL.rstrip("/")
+    lines = [f"<b>Задачи {target.name} ({len(tasks)}):</b>\n"]
+    for i, t in enumerate(tasks, 1):
+        st = t.status.value if hasattr(t.status, "value") else t.status
+        bug = "[Баг] " if t.is_bug else ""
+        link = f'<a href="{base}/enter/{asker.id}?next=/task/{t.id}">открыть</a>'
+        lines.append(f"{i}. {bug}{t.title} — P{t.priority} — {st} — {link}")
+    return "\n".join(lines)
+
+
 def _menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
         [KeyboardButton("Мои задачи"), KeyboardButton("Просрочки")],
@@ -128,8 +175,9 @@ async def _get_context_data(session, user) -> dict:
             "priority": t.priority, "is_bug": t.is_bug,
             "due_date": t.due_date.isoformat() if t.due_date else None,
             "project": t.project.name if t.project else None,
-            "assignee": t.assignee.name if t.assignee else None,
-            "link": f"{base_url}/task/{t.id}",
+            "assignee": t.assignee.name if t.assignee else "не назначен",
+            # автологин-ссылка для того, кто спрашивает
+            "link": f"{base_url}/enter/{user.id}?next=/task/{t.id}",
         }
 
     return {
@@ -822,6 +870,16 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _process_smart(update, context, text, session, user):
     """Send message to smart assistant and handle the action."""
     ctx_data = await _get_context_data(session, user)
+
+    # Детерминированный ответ на «какие задачи у X» — без GPT, гарантированно
+    # правильная фильтрация по исполнителю и ссылки.
+    all_users = await get_all_users(session)
+    target = _assignee_question(text, all_users)
+    if target:
+        reply = await _format_user_tasks(session, target, user)
+        await _reply(update, reply)
+        return
+
     history = context.user_data.get("chat_history", [])
 
     result = await smart_assistant(text, ctx_data, history)
