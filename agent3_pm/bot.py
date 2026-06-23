@@ -117,20 +117,36 @@ def _match_user_genitive(cand: str, users: list):
     return None
 
 
+# Слова-уточнения: если есть в запросе — это НЕ простой кейс, отдаём GPT
+_QUALIFIERS = (
+    "кроме", "которы", "по ", " про ", "статус", "приоритет", "p0", "p1", "p2", "p3",
+    "срочн", "сегодня", "завтра", "вчера", "недел", "проект", "доск", "в работе",
+    "готов", "бэклог", "backlog", "todo", "wip", "за прошл", "только", "кроме",
+)
+# Местоимения/вопросительные — не имена
+_NOT_NAMES = {"кого", "него", "неё", "нее", "них", "кому", "всех", "каждого", "меня", "себя", "тебя", "кто"}
+
+
 def _task_intent(text: str, users: list):
-    """Detect ('list'|'delete', user) for 'задачи у X' / 'удали все задачи X'. Else (None, None)."""
+    """Detect ('list'|'delete', user) ТОЛЬКО для простых 'задачи у X' / 'удали задачи X'.
+    Любой нюанс (фильтры, статусы, 'кроме', 'по сайту') → (None, None), пусть решает GPT."""
     import re
     low = text.lower()
     if "задач" not in low:
         return (None, None)
     if any(w in low for w in ("просроч", "баг", "сколько", "мои задач")):
         return (None, None)
+    # есть уточнения — не наш простой кейс
+    if any(q in low for q in _QUALIFIERS):
+        return (None, None)
     is_delete = any(w in low for w in ("удали", "удал", "снеси", "убери", "почист"))
-    # удаление ВСЕХ задач без указания человека — не трогаем (опасно), пусть GPT/подтверждение
     m = re.search(r"\bу\s+([а-яёa-zA-Z]{3,})", low) or re.search(r"задач[аиу]?\s+([а-яёa-zA-Z]{3,})\b", low)
     if not m:
         return (None, None)
-    target = _match_user_genitive(m.group(1), users)
+    cand = m.group(1)
+    if cand in _NOT_NAMES:
+        return (None, None)
+    target = _match_user_genitive(cand, users)
     if not target:
         return (None, None)
     return ("delete" if is_delete else "list", target)
