@@ -62,35 +62,78 @@ def _fuzzy_match_user(name: str, users: list):
     return None
 
 
+# Уменьшительные имена → канонический корень
+_NICKNAMES = {
+    "ван": "иван", "вань": "иван", "ваня": "иван",
+    "миш": "михаил", "миха": "михаил",
+    "саш": "александр", "шур": "александр",
+    "дим": "дмитрий",
+    "лёш": "алексей", "леш": "алексей", "алёш": "алексей", "алеш": "алексей",
+    "кол": "николай",
+    "серёж": "сергей", "сереж": "сергей", "серёг": "сергей", "серег": "сергей", "сер": "сергей",
+    "вов": "владимир", "волод": "владимир",
+    "жен": "евгений",
+    "паш": "павел",
+    "ром": "роман",
+    "кост": "константин",
+    "петь": "пётр", "пет": "пётр",
+    "юр": "юрий",
+    "андрюш": "андрей",
+    "вит": "виктор",
+    "тол": "анатолий",
+    "бор": "борис",
+    "макс": "максим",
+    "арс": "арсений",
+    "русл": "руслан",
+}
+
+
+def _name_stems(word: str) -> set[str]:
+    word = word.lower().strip(" ?.,!»«\"'")
+    stems = set()
+    if len(word) >= 3:
+        stems.update({word[:5], word[:4], word[:3]})
+    for nick, full in _NICKNAMES.items():
+        if word.startswith(nick):
+            stems.update({full, full[:4]})
+    return {s for s in stems if len(s) >= 3}
+
+
 def _match_user_genitive(cand: str, users: list):
-    """Match a name possibly in genitive case (ромы→Роман, арсения→арсений) by stem."""
+    """Match a name in genitive/diminutive form (ромы→Роман, вани→Иван, арсения→арсений)."""
     cand = cand.lower().strip(" ?.,!»«\"'")
     if len(cand) < 3:
         return None
     exact = _fuzzy_match_user(cand, users)
     if exact:
         return exact
-    stem = cand[:3]
+    stems = _name_stems(cand)
     for u in users:
-        for w in u.name.lower().split():
-            if len(w) >= 3 and w[:3] == stem:
+        nl = u.name.lower()
+        words = nl.split()
+        for st in stems:
+            if st in nl or any(w.startswith(st) for w in words):
                 return u
     return None
 
 
-def _assignee_question(text: str, users: list):
-    """If text is 'какие задачи у <name>' / 'задачи <name>' — return matched user, else None."""
+def _task_intent(text: str, users: list):
+    """Detect ('list'|'delete', user) for 'задачи у X' / 'удали все задачи X'. Else (None, None)."""
     import re
     low = text.lower()
     if "задач" not in low:
-        return None
-    # общие запросы — не перехватываем, пусть идёт в GPT
-    if any(w in low for w in ("просроч", "баг", "все задачи всех", "сколько", "мои задач")):
-        return None
-    m = re.search(r"\bу\s+([а-яёa-zA-Z]{3,})", low) or re.search(r"задач[аи]?\s+([а-яёa-zA-Z]{3,})\b", low)
+        return (None, None)
+    if any(w in low for w in ("просроч", "баг", "сколько", "мои задач")):
+        return (None, None)
+    is_delete = any(w in low for w in ("удали", "удал", "снеси", "убери", "почист"))
+    # удаление ВСЕХ задач без указания человека — не трогаем (опасно), пусть GPT/подтверждение
+    m = re.search(r"\bу\s+([а-яёa-zA-Z]{3,})", low) or re.search(r"задач[аиу]?\s+([а-яёa-zA-Z]{3,})\b", low)
     if not m:
-        return None
-    return _match_user_genitive(m.group(1), users)
+        return (None, None)
+    target = _match_user_genitive(m.group(1), users)
+    if not target:
+        return (None, None)
+    return ("delete" if is_delete else "list", target)
 
 
 async def _format_user_tasks(session, target, asker) -> str:
@@ -871,13 +914,24 @@ async def _process_smart(update, context, text, session, user):
     """Send message to smart assistant and handle the action."""
     ctx_data = await _get_context_data(session, user)
 
-    # Детерминированный ответ на «какие задачи у X» — без GPT, гарантированно
-    # правильная фильтрация по исполнителю и ссылки.
+    # Детерминированная обработка «какие задачи у X» и «удали все задачи X» —
+    # без GPT, гарантированно правильная фильтрация по исполнителю.
     all_users = await get_all_users(session)
-    target = _assignee_question(text, all_users)
-    if target:
-        reply = await _format_user_tasks(session, target, user)
-        await _reply(update, reply)
+    intent, target = _task_intent(text, all_users)
+    if target and intent == "list":
+        await _reply(update, await _format_user_tasks(session, target, user))
+        return
+    if target and intent == "delete":
+        tasks = [t for t in await get_all_tasks(session, assignee_id=target.id) if not t.archived_at]
+        if not tasks:
+            await _reply(update, f"У {target.name} нет задач для удаления.")
+            return
+        from agent3_pm.repository import delete_task as del_task
+        n = 0
+        for t in list(tasks):
+            if await del_task(session, t.id):
+                n += 1
+        await _reply(update, f"Удалено задач у {target.name}: {n}.")
         return
 
     history = context.user_data.get("chat_history", [])
