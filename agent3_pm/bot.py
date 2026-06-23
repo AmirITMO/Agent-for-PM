@@ -148,6 +148,9 @@ def _task_intent(text: str, users: list):
     is_delete = any(w in low for w in ("удали", "удал", "снеси", "убери", "почист"))
     if not is_delete and any(v in low for v in _CREATE_VERBS):
         return (None, None)
+    # Массовое удаление — ТОЛЬКО при явном «все/всё». Иначе GPT разберётся с нюансом.
+    if is_delete and not any(w in low for w in ("все ", "всё ", "все\n", "всё\n")):
+        return (None, None)
     # есть уточнения — не наш простой кейс
     if any(q in low for q in _QUALIFIERS):
         return (None, None)

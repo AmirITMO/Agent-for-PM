@@ -517,9 +517,14 @@ class TestTaskIntent:
         i, t = bot._task_intent("какие задачи у ромы?", fake_users)
         assert i == "list"
 
-    def test_simple_delete(self, fake_users):
+    def test_explicit_all_delete(self, fake_users):
         i, t = bot._task_intent("удали все задачи арсения", fake_users)
         assert i == "delete"
+
+    def test_partial_delete_goes_to_gpt(self, fake_users):
+        for text in ["удали задачи арсения", "удали 2 задачи арсения", "удали задачу Zoom"]:
+            i, t = bot._task_intent(text, fake_users)
+            assert i is None, f"partial delete should go to GPT: {text!r}"
 
     def test_create_not_intercepted(self, fake_users):
         for text in [
