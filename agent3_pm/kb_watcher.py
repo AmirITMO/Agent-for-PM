@@ -13,7 +13,7 @@ from agent3_pm.task_agent import _get_client
 logger = logging.getLogger(__name__)
 
 KB_REPO = "Deci1337/mai-knowledge-base"
-KB_FOLDERS = ["user/calls", "user/bugs"]
+KB_FOLDERS = ["user/calls", "user/bugs", "calls/tasks"]
 KB_API = f"https://api.github.com/repos/{KB_REPO}/contents"
 KB_RAW = f"https://raw.githubusercontent.com/{KB_REPO}/main"
 
