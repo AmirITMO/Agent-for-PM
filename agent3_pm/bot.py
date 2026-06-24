@@ -1234,27 +1234,26 @@ async def _notify_managers_task_done(session, task):
 
 
 async def _ask_next_missing_field(update, context, ctx_data=None):
-    """Детерминированно спрашиваем обязательные поля по одному. Когда все заполнены — карточка."""
+    """Спрашиваем только то, что GPT не смог заполнить валидно."""
     td = context.user_data.get("pending_task")
     if not td:
         await _reply(update, "Нет данных задачи. Начни заново через «Задать задачу».", _menu_kb())
         return
 
-    # Загрузим реальные проекты для валидации
     async with AsyncSessionLocal() as s:
         real_projects = await get_all_projects(s)
         real_users_list = await get_all_users(s)
     valid_proj_names = {p.name for p in real_projects}
     valid_statuses = {"backlog", "planning", "todo", "wip"}
 
-    # 1. Проект — валидируем по реальным названиям в БД
+    # 1. Проект — ОБЯЗАТЕЛЬНО спрашиваем если GPT не угадал точное имя из БД
     if not td.get("project_name") or td["project_name"] not in valid_proj_names:
         td["project_name"] = None
         buttons = [[InlineKeyboardButton(p.name, callback_data=f"crt_proj_{p.id}")] for p in real_projects]
         await _reply(update, "На какую доску поставить задачу?", InlineKeyboardMarkup(buttons))
         return
 
-    # 2. Этап — валидируем
+    # 2. Этап — ОБЯЗАТЕЛЬНО спрашиваем если GPT не вернул валидный статус
     if not td.get("status") or td["status"] not in valid_statuses:
         td["status"] = None
         buttons = [
@@ -1266,34 +1265,45 @@ async def _ask_next_missing_field(update, context, ctx_data=None):
         await _reply(update, "На какой этап поставить?", InlineKeyboardMarkup(buttons))
         return
 
-    # 3. Приоритет — ВСЕГДА спрашиваем (GPT галлюцинирует)
+    # 3. Приоритет — авто-подтверждаем если GPT вернул 0-3, иначе спрашиваем
     if not td.get("_priority_confirmed"):
-        buttons = [
-            [InlineKeyboardButton("P0 — срочно", callback_data="crt_prio_0"),
-             InlineKeyboardButton("P1 — высокий", callback_data="crt_prio_1")],
-            [InlineKeyboardButton("P2 — обычный", callback_data="crt_prio_2"),
-             InlineKeyboardButton("P3 — низкий", callback_data="crt_prio_3")],
-        ]
-        await _reply(update, "Какой приоритет?", InlineKeyboardMarkup(buttons))
-        return
+        gpt_prio = td.get("priority")
+        if gpt_prio is not None and gpt_prio in (0, 1, 2, 3):
+            td["_priority_confirmed"] = True
+        else:
+            td["priority"] = DEFAULT_PRIORITY
+            buttons = [
+                [InlineKeyboardButton("P0 — срочно", callback_data="crt_prio_0"),
+                 InlineKeyboardButton("P1 — высокий", callback_data="crt_prio_1")],
+                [InlineKeyboardButton("P2 — обычный", callback_data="crt_prio_2"),
+                 InlineKeyboardButton("P3 — низкий", callback_data="crt_prio_3")],
+            ]
+            await _reply(update, "Какой приоритет?", InlineKeyboardMarkup(buttons))
+            return
 
-    # 4. Исполнитель — ВСЕГДА спрашиваем
+    # 4. Исполнитель — авто-подтверждаем если GPT нашёл имя и оно совпадает с реальным сотрудником
     if not td.get("_assignee_confirmed"):
-        rows = []
-        row = []
-        for u in real_users_list:
-            row.append(InlineKeyboardButton(u.name, callback_data=f"crt_user_{u.id}"))
-            if len(row) == 2:
+        if td.get("assignee_name"):
+            match = _fuzzy_match_user(td["assignee_name"], real_users_list)
+            if match:
+                td["assignee_name"] = match.name
+                td["_assignee_confirmed"] = True
+            else:
+                td["assignee_name"] = None
+        if not td.get("_assignee_confirmed"):
+            rows = []
+            row = []
+            for u in real_users_list:
+                row.append(InlineKeyboardButton(u.name, callback_data=f"crt_user_{u.id}"))
+                if len(row) == 2:
+                    rows.append(row)
+                    row = []
+            if row:
                 rows.append(row)
-                row = []
-        if row:
-            rows.append(row)
-        rows.append([InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")])
-        pre = f"\nАгент предложил: {td['assignee_name']}" if td.get("assignee_name") else ""
-        await _reply(update, f"Кому назначить задачу?{pre}", InlineKeyboardMarkup(rows))
-        return
+            rows.append([InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")])
+            await _reply(update, "Кому назначить задачу?", InlineKeyboardMarkup(rows))
+            return
 
-    # Все поля заполнены → показываем карточку
     await _show_final_card(update, context)
 
 
