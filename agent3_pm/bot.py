@@ -819,35 +819,20 @@ async def _edit_pending_task(update: Update, context: ContextTypes.DEFAULT_TYPE,
             if raw.startswith("json"):
                 raw = raw[4:]
         updated = json.loads(raw)
-        # Preserve internal keys
+        # Preserve internal keys, but re-validate assignee
         for k in list(td.keys()):
             if k.startswith("_"):
                 updated[k] = td[k]
+        # GPT may have changed assignee — need re-validation
+        if updated.get("assignee_name") != td.get("assignee_name"):
+            updated.pop("_assignee_confirmed", None)
         context.user_data["pending_task"] = updated
     except Exception:
         await _reply(update, "Не удалось обработать. Попробуй ещё.")
         return
 
-    # Show updated card
-    lines = [f"<b>{updated.get('title', '—')}</b>\n"]
-    if updated.get("description"):
-        lines.append(f"{updated['description']}\n")
-    if updated.get("assignee_name"):
-        lines.append(f"Исполнитель: {updated['assignee_name']}")
-    lines.append(f"Приоритет: P{updated.get('priority') if updated.get('priority') is not None else DEFAULT_PRIORITY}")
-    if updated.get("is_bug"):
-        lines.append("Баг")
-    if updated.get("due_date"):
-        lines.append(f"Дедлайн: {updated['due_date']}")
-    if updated.get("project_name"):
-        lines.append(f"Проект: {updated['project_name']}")
-    if updated.get("status"):
-        lines.append(f"Этап: {updated['status']}")
-    lines.append("\nПрикрепить файлы?")
-    await _reply(update, "\n".join(lines),
-        InlineKeyboardMarkup([
-            [InlineKeyboardButton("Да", callback_data="files_yes"),
-             InlineKeyboardButton("Нет, создать", callback_data="files_no")]]))
+    # Re-run field validation instead of showing card directly
+    await _ask_next_missing_field(update, context)
 
 
 # ── Execute task creation ──
