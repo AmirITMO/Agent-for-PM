@@ -758,7 +758,13 @@ async def _handle_approval_edit(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     context.user_data.pop("editing_batch", None)
-    await _send_approval_card(update.message, batch_id, batch)
+
+    # Прогоняем через детерминированную валидацию — как при создании задачи.
+    # Недостающие поля (проект, этап, приоритет, исполнитель) будут уточнены кнопками.
+    td = batch["tasks"][idx]
+    context.user_data["_approval_validating"] = batch_id
+    context.user_data["pending_task"] = td
+    await _ask_next_missing_field(update, context)
 
 
 def _get_client_openai():
@@ -1244,7 +1250,7 @@ async def _ask_next_missing_field(update, context, ctx_data=None):
 
 
 async def _show_final_card(update, context):
-    """Показать финальную карточку задачи с кнопкой файлов."""
+    """Показать финальную карточку задачи с кнопкой файлов (или вернуть в approval)."""
     td = context.user_data.get("pending_task", {})
     lines = [f"<b>{td.get('title', '—')}</b>\n"]
     if td.get("description"):
@@ -1257,6 +1263,19 @@ async def _show_final_card(update, context):
         lines.append(f"Дедлайн: {td['due_date']}")
     lines.append(f"Проект: {td.get('project_name', '—')}")
     lines.append(f"Этап: {td.get('status', '—')}")
+
+    # Если это валидация approval-задачи → вернуть в approval flow
+    batch_id = context.user_data.pop("_approval_validating", None)
+    if batch_id:
+        from agent3_pm.kb_watcher import get_batch
+        batch = get_batch(batch_id)
+        if batch:
+            idx = batch["current_idx"]
+            batch["tasks"][idx] = td
+            context.user_data.pop("pending_task", None)
+            await _send_approval_card(update.message, batch_id, batch)
+            return
+
     lines.append("\nПрикрепить файлы?")
     await _reply(update, "\n".join(lines),
         InlineKeyboardMarkup([
