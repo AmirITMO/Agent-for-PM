@@ -32,7 +32,10 @@ async def main():
     logger.info("All systems ready. Running bot polling...")
     await bot_app.initialize()
     await bot_app.start()
-    await bot_app.updater.start_polling()
+    await bot_app.updater.start_polling(
+        allowed_updates=["message", "callback_query"],
+        drop_pending_updates=True,
+    )
 
     logger.info("Starting web server on %s:%s", config.WEB_HOST, config.WEB_PORT)
     uvi_config = uvicorn.Config(
