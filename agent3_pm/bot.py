@@ -66,7 +66,7 @@ def _link_task(task_id: int, label: str = "Открыть задачу", user_id
     base = config.WEB_BASE_URL.rstrip("/")
     if user_id:
         tok = _make_enter_token(user_id)
-        return f'<a href="{base}/enter/{user_id}?tok={tok}&next=/task/{task_id}">{label}</a>'
+        return f'<a href="{base}/enter/{user_id}?tok={tok}&amp;next=/task/{task_id}">{label}</a>'
     return f'<a href="{base}/task/{task_id}">{label}</a>'
 
 
@@ -215,7 +215,7 @@ async def _send_team_report(update, session, asker):
             st = t.status.value if hasattr(t.status, "value") else t.status
             bug = "[Баг] " if t.is_bug else ""
             tok = _make_enter_token(asker.id)
-            link = f'<a href="{base}/enter/{asker.id}?tok={tok}&next=/task/{t.id}">открыть</a>'
+            link = f'<a href="{base}/enter/{asker.id}?tok={tok}&amp;next=/task/{t.id}">открыть</a>'
             lines.append(f"• {bug}{t.title} — {st} — {link}")
         blocks.append("\n".join(lines))
 
@@ -247,7 +247,7 @@ async def _format_user_tasks(session, target, asker) -> str:
         st = t.status.value if hasattr(t.status, "value") else t.status
         bug = "[Баг] " if t.is_bug else ""
         tok = _make_enter_token(asker.id)
-        link = f'<a href="{base}/enter/{asker.id}?tok={tok}&next=/task/{t.id}">открыть</a>'
+        link = f'<a href="{base}/enter/{asker.id}?tok={tok}&amp;next=/task/{t.id}">открыть</a>'
         lines.append(f"{i}. {bug}{t.title} — P{t.priority} — {st} — {link}")
     return "\n".join(lines)
 
@@ -315,7 +315,8 @@ async def _reply(update: Update, text: str, reply_markup=None):
         try:
             await msg.reply_text(clean, parse_mode=ParseMode.HTML,
                                  reply_markup=reply_markup, disable_web_page_preview=True)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"HTML parse failed, sending plain text: {e}\nText: {clean[:200]}")
             await msg.reply_text(clean, reply_markup=reply_markup,
                                  disable_web_page_preview=True)
 

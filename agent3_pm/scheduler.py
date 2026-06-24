@@ -29,7 +29,7 @@ def _make_enter_token(user_id: int) -> str:
 def _enter_link(user_id: int, path: str, label: str = "ссылка") -> str:
     base = config.WEB_BASE_URL.rstrip("/")
     tok = _make_enter_token(user_id)
-    return f'<a href="{base}/enter/{user_id}?tok={tok}&next={path}">{label}</a>'
+    return f'<a href="{base}/enter/{user_id}?tok={tok}&amp;next={path}">{label}</a>'
 
 
 async def send_morning_summary(bot: Bot):
