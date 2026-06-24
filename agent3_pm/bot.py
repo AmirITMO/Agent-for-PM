@@ -1196,20 +1196,28 @@ async def _notify_task_updated_bot(session, task, updater, old_assignee_id: int 
 
 async def _ask_next_missing_field(update, context, ctx_data=None):
     """Детерминированно спрашиваем обязательные поля по одному. Когда все заполнены — карточка."""
-    td = context.user_data.get("pending_task", {})
+    td = context.user_data.get("pending_task")
+    if not td:
+        await _reply(update, "Нет данных задачи. Начни заново через «Задать задачу».", _menu_kb())
+        return
 
-    # 1. Проект (доска)
-    if not td.get("project_name"):
-        projects = ctx_data.get("projects", []) if ctx_data else []
-        if not projects:
-            async with AsyncSessionLocal() as s:
-                projects = [{"id": p.id, "name": p.name} for p in await get_all_projects(s)]
-        buttons = [[InlineKeyboardButton(p["name"], callback_data=f"crt_proj_{p['id']}")] for p in projects]
+    # Загрузим реальные проекты для валидации
+    async with AsyncSessionLocal() as s:
+        real_projects = await get_all_projects(s)
+        real_users_list = await get_all_users(s)
+    valid_proj_names = {p.name for p in real_projects}
+    valid_statuses = {"backlog", "planning", "todo", "wip"}
+
+    # 1. Проект — валидируем по реальным названиям в БД
+    if not td.get("project_name") or td["project_name"] not in valid_proj_names:
+        td["project_name"] = None
+        buttons = [[InlineKeyboardButton(p.name, callback_data=f"crt_proj_{p.id}")] for p in real_projects]
         await _reply(update, "На какую доску поставить задачу?", InlineKeyboardMarkup(buttons))
         return
 
-    # 2. Этап
-    if not td.get("status"):
+    # 2. Этап — валидируем
+    if not td.get("status") or td["status"] not in valid_statuses:
+        td["status"] = None
         buttons = [
             [InlineKeyboardButton("Бэклог", callback_data="crt_status_backlog"),
              InlineKeyboardButton("К выполнению", callback_data="crt_status_todo")],
@@ -1219,9 +1227,8 @@ async def _ask_next_missing_field(update, context, ctx_data=None):
         await _reply(update, "На какой этап поставить?", InlineKeyboardMarkup(buttons))
         return
 
-    # 3. Приоритет
-    if td.get("_priority_confirmed") is not True and td.get("_priority_asked") is not True:
-        td["_priority_asked"] = True
+    # 3. Приоритет — ВСЕГДА спрашиваем (GPT галлюцинирует)
+    if not td.get("_priority_confirmed"):
         buttons = [
             [InlineKeyboardButton("P0 — срочно", callback_data="crt_prio_0"),
              InlineKeyboardButton("P1 — высокий", callback_data="crt_prio_1")],
@@ -1231,24 +1238,20 @@ async def _ask_next_missing_field(update, context, ctx_data=None):
         await _reply(update, "Какой приоритет?", InlineKeyboardMarkup(buttons))
         return
 
-    # 4. Исполнитель
-    if not td.get("assignee_name") and td.get("_assignee_confirmed") is not True:
-        td["_assignee_confirmed"] = True
-        users = ctx_data.get("users", []) if ctx_data else []
-        if not users:
-            async with AsyncSessionLocal() as s:
-                users = [{"id": u.id, "name": u.name} for u in await get_all_users(s)]
+    # 4. Исполнитель — ВСЕГДА спрашиваем
+    if not td.get("_assignee_confirmed"):
         rows = []
         row = []
-        for u in users:
-            row.append(InlineKeyboardButton(u["name"], callback_data=f"crt_user_{u['id']}"))
+        for u in real_users_list:
+            row.append(InlineKeyboardButton(u.name, callback_data=f"crt_user_{u.id}"))
             if len(row) == 2:
                 rows.append(row)
                 row = []
         if row:
             rows.append(row)
         rows.append([InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")])
-        await _reply(update, "Кому назначить задачу?", InlineKeyboardMarkup(rows))
+        pre = f"\nАгент предложил: {td['assignee_name']}" if td.get("assignee_name") else ""
+        await _reply(update, f"Кому назначить задачу?{pre}", InlineKeyboardMarkup(rows))
         return
 
     # Все поля заполнены → показываем карточку
