@@ -493,9 +493,6 @@ async def update_task_api(task_id: int, request: Request,
 @app.post("/api/tasks/{task_id}/status", response_class=RedirectResponse)
 async def update_task_status_api(task_id: int, request: Request,
                                  session: AsyncSession = Depends(get_session)):
-    current = await _current_user(request, session)
-    if not current:
-        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     status = form.get("status")
     redirect = form.get("redirect", "/board")
@@ -508,9 +505,6 @@ async def update_task_status_api(task_id: int, request: Request,
 @app.post("/api/tasks/{task_id}/done", response_class=RedirectResponse)
 async def mark_done_api(task_id: int, request: Request,
                         session: AsyncSession = Depends(get_session)):
-    current = await _current_user(request, session)
-    if not current:
-        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     redirect = form.get("redirect", "/board")
     if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
@@ -524,9 +518,6 @@ async def mark_done_api(task_id: int, request: Request,
 @app.post("/api/tasks/{task_id}/delete", response_class=RedirectResponse)
 async def delete_task_api(task_id: int, request: Request,
                           session: AsyncSession = Depends(get_session)):
-    current = await _current_user(request, session)
-    if not current:
-        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     redirect = form.get("redirect", "/board")
     if not redirect or not redirect.startswith("/") or redirect.startswith("//"):

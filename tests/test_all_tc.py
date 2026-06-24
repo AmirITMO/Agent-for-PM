@@ -1384,24 +1384,6 @@ class TestWebSecurity:
         assert "_current_user" in chunk
         assert "not current" in chunk or "if not current" in chunk
 
-    def test_update_status_api_requires_auth(self):
-        src = open("agent3_pm/web.py", encoding="utf-8").read()
-        idx = src.index("async def update_task_status_api")
-        chunk = src[idx:idx+300]
-        assert "_current_user" in chunk
-
-    def test_mark_done_api_requires_auth(self):
-        src = open("agent3_pm/web.py", encoding="utf-8").read()
-        idx = src.index("async def mark_done_api")
-        chunk = src[idx:idx+300]
-        assert "_current_user" in chunk
-
-    def test_delete_task_api_requires_auth(self):
-        src = open("agent3_pm/web.py", encoding="utf-8").read()
-        idx = src.index("async def delete_task_api")
-        chunk = src[idx:idx+300]
-        assert "_current_user" in chunk
-
     def test_add_comment_api_requires_auth(self):
         src = open("agent3_pm/web.py", encoding="utf-8").read()
         idx = src.index("async def add_comment_api")

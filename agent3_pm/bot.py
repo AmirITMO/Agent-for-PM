@@ -908,8 +908,12 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Cannot notify assignee_id={assignee_id}: task={task is not None}, "
                                    f"assignee={task.assignee if task else None}, "
                                    f"tg_id={task.assignee.telegram_id if task and task.assignee else None}")
-            except Exception:
-                logger.exception(f"Failed to notify assignee_id={assignee_id}")
+            except Exception as e:
+                err = str(e)
+                if "Chat not found" in err or "bot was blocked" in err:
+                    logger.warning(f"Cannot notify assignee_id={assignee_id}: {err} (user hasn't started bot)")
+                else:
+                    logger.exception(f"Failed to notify assignee_id={assignee_id}")
 
     context.user_data.pop("pending_task", None)
     context.user_data.pop("pending_files", None)
