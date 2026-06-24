@@ -1,4 +1,7 @@
 import logging
+import time
+import hmac
+import hashlib
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -13,6 +16,20 @@ from agent3_pm.formatter import format_morning_summary, format_deadline_warning
 from agent3_pm.models import ACTIVE_STATUSES
 
 logger = logging.getLogger(__name__)
+
+
+def _make_enter_token(user_id: int) -> str:
+    ts = str(int(time.time()))
+    sig = hmac.new(config.SECRET_KEY.encode(),
+                   f"{user_id}:{ts}".encode(),
+                   hashlib.sha256).hexdigest()[:16]
+    return f"{ts}.{sig}"
+
+
+def _enter_link(user_id: int, path: str, label: str = "ссылка") -> str:
+    base = config.WEB_BASE_URL.rstrip("/")
+    tok = _make_enter_token(user_id)
+    return f'<a href="{base}/enter/{user_id}?tok={tok}&next={path}">{label}</a>'
 
 
 async def send_morning_summary(bot: Bot):
@@ -52,7 +69,7 @@ async def send_morning_summary(bot: Bot):
             if overdue:
                 lines.append(f"<b>Просрочки ({len(overdue)}):</b>")
                 for t in overdue:
-                    lines.append(f'  {t.title} — {t.due_date.strftime("%d.%m.%Y")} <a href="{base}/enter/{user.id}?next=/task/{t.id}">ссылка</a>')
+                    lines.append(f'  {t.title} — {t.due_date.strftime("%d.%m.%Y")} {_enter_link(user.id, f"/task/{t.id}")}')
             else:
                 lines.append("Просрочки — нет")
             lines.append("")
@@ -60,7 +77,7 @@ async def send_morning_summary(bot: Bot):
                 lines.append(f"<b>Дедлайны скоро ({len(hot)}):</b>")
                 for t in hot:
                     dd = t.due_date.strftime('%d.%m.%Y') if t.due_date else ""
-                    lines.append(f'  {t.title} — {dd} <a href="{base}/enter/{user.id}?next=/task/{t.id}">ссылка</a>')
+                    lines.append(f'  {t.title} — {dd} {_enter_link(user.id, f"/task/{t.id}")}')
             else:
                 lines.append("Ближайших дедлайнов нет")
 
@@ -132,7 +149,7 @@ async def check_deadlines(bot: Bot):
 
             text = (f"<b>{urgency}</b>\n\n{task.title}"
                     f"\nP{task.priority}"
-                    f'\n\n<a href="{base}/enter/{task.assignee.id}?next=/task/{task.id}">Открыть задачу</a>')
+                    f"\n\n{_enter_link(task.assignee.id, f'/task/{task.id}', 'Открыть задачу')}")
 
             try:
                 await bot.send_message(chat_id=task.assignee.telegram_id, text=text,
@@ -185,7 +202,7 @@ async def send_deadline_reminders(bot: Bot):
             for t in sorted(active, key=lambda x: x.due_date):
                 dd = t.due_date.strftime('%d.%m.%Y')
                 overdue = " (ПРОСРОЧЕНО)" if t.is_overdue else ""
-                lines.append(f'{t.title} — {dd}{overdue} <a href="{base}/enter/{user.id}?next=/task/{t.id}">ссылка</a>')
+                lines.append(f'{t.title} — {dd}{overdue} {_enter_link(user.id, f"/task/{t.id}")}')
 
             try:
                 await bot.send_message(chat_id=user.telegram_id, text="\n".join(lines),
@@ -239,15 +256,6 @@ def create_scheduler(bot: Bot) -> AsyncIOScheduler:
             name=f"Deadline Reminder ({label})",
             replace_existing=True,
         )
-
-    from agent3_pm.github_watcher import check_github_bugs
-    scheduler.add_job(
-        check_github_bugs,
-        trigger=IntervalTrigger(minutes=10),
-        id="github_bugs",
-        name="GitHub Bugs Watcher",
-        replace_existing=True,
-    )
 
     from agent3_pm.kb_watcher import check_kb_updates
     scheduler.add_job(

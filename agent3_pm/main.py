@@ -5,7 +5,7 @@ from telegram import Bot
 
 from agent3_pm.config import config
 from agent3_pm.database import init_db
-from agent3_pm.bot import create_bot_application
+from agent3_pm.bot import create_bot_application, set_scheduler
 from agent3_pm.scheduler import create_scheduler
 from agent3_pm.web import app as fastapi_app
 
@@ -26,6 +26,7 @@ async def main():
 
     logger.info("Starting scheduler...")
     scheduler = create_scheduler(bot)
+    set_scheduler(scheduler)
     scheduler.start()
 
     logger.info("All systems ready. Running bot polling...")

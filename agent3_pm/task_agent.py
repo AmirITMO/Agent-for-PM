@@ -171,7 +171,7 @@ async def smart_assistant(user_message: str, context_data: dict,
                 msg = m.group(1).replace('\\n', '\n').replace('\\"', '"').replace('\\/', '/')
                 return {"action": "answer", "message": msg}
         except Exception:
-            pass
+            logger.warning("Failed to extract message from malformed JSON response")
         return {"action": "answer", "message": "Не удалось обработать ответ. Попробуй переформулировать."}
     except Exception:
         logger.exception("Smart assistant failed")

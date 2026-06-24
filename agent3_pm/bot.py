@@ -32,6 +32,17 @@ from agent3_pm.task_agent import smart_assistant, transcribe_voice
 
 logger = logging.getLogger(__name__)
 
+_scheduler_ref = None
+
+
+def set_scheduler(scheduler):
+    global _scheduler_ref
+    _scheduler_ref = scheduler
+
+
+def _get_scheduler():
+    return _scheduler_ref
+
 
 def _make_enter_token(user_id: int) -> str:
     ts = str(int(time.time()))
@@ -1134,7 +1145,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if not context.user_data.get("chat_mode"):
-        context.user_data["chat_mode"] = True
+        context.user_data["chat_mode"] = "create"
         context.user_data["chat_history"] = []
 
     voice = update.message.voice or update.message.audio
@@ -1192,6 +1203,32 @@ async def _notify_task_updated_bot(session, task, updater, old_assignee_id: int 
                 logger.info(f"Reassign notify sent to {old_user.name}")
     except Exception:
         logger.exception("notify task update failed")
+
+
+async def _notify_managers_task_done(session, task):
+    """Notify Level 1 managers when a task is marked done."""
+    try:
+        from telegram import Bot
+        from agent3_pm.repository import get_managers
+        if not config.TELEGRAM_BOT_TOKEN:
+            return
+        bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        managers = await get_managers(session)
+        assignee = task.assignee.name if task.assignee else "не назначен"
+        project = task.project.name if task.project else "—"
+        base = config.WEB_BASE_URL.rstrip("/")
+        text = (f"Задача выполнена\n\n<b>{task.title}</b>\n"
+                f"Проект: {project}\nИсполнитель: {assignee}\n\n"
+                f'<a href="{base}/task/{task.id}">Открыть задачу</a>')
+        for m in managers:
+            if m.telegram_id:
+                try:
+                    await bot_inst.send_message(chat_id=m.telegram_id, text=text,
+                                                parse_mode="HTML", disable_web_page_preview=True)
+                except Exception:
+                    logger.exception(f"Failed to notify manager {m.name} about task done")
+    except Exception:
+        logger.exception("notify managers task done failed")
 
 
 async def _ask_next_missing_field(update, context, ctx_data=None):
@@ -1299,7 +1336,7 @@ async def _send_typing(update):
         if msg:
             await msg.chat.send_action("typing")
     except Exception:
-        pass
+        logger.debug("Failed to send typing indicator")
 
 
 async def _process_smart(update, context, text, session, user):
@@ -1455,10 +1492,11 @@ async def _process_smart(update, context, text, session, user):
         await update_task(session, task.id, **changes)
         await _reply(update, f"Обновлено: <b>{task.title}</b>\n{_link_task(task.id, user_id=user.id)}")
 
-        # Уведомить ответственного (если не он сам обновил)
         task = await get_task_by_id(session, task.id)
         if task:
             await _notify_task_updated_bot(session, task, user, old_assignee_id)
+            if task.status == TaskStatus.DONE:
+                await _notify_managers_task_done(session, task)
 
     elif action == "delete_tasks":
         from agent3_pm.repository import get_task_by_id, delete_task as del_task
@@ -1491,11 +1529,12 @@ async def _process_smart(update, context, text, session, user):
             await _reply(update, "Не удалось определить задачу для удаления.")
 
     elif action == "set_reminder":
-        delay = int(result.get("delay_minutes", 30))
+        try:
+            delay = int(result.get("delay_minutes", 30))
+        except (ValueError, TypeError):
+            delay = 30
         msg = result.get("message", "Напоминание")
         chat_id = update.effective_user.id
-        from apscheduler.schedulers.asyncio import AsyncIOScheduler
-        import asyncio
 
         async def _send_reminder():
             from telegram import Bot
@@ -1503,10 +1542,22 @@ async def _process_smart(update, context, text, session, user):
                 bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
                 await bot_inst.send_message(chat_id=chat_id, text=f"Напоминание:\n{msg}")
             except Exception:
-                pass
+                logger.exception(f"Failed to send reminder to {chat_id}")
 
-        loop = asyncio.get_event_loop()
-        loop.call_later(delay * 60, lambda: asyncio.ensure_future(_send_reminder()))
+        from apscheduler.triggers.date import DateTrigger
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(config.TIMEZONE)
+        run_at = dt.datetime.now(tz) + dt.timedelta(minutes=delay)
+        scheduler = _get_scheduler()
+        if scheduler:
+            scheduler.add_job(_send_reminder, trigger=DateTrigger(run_date=run_at),
+                              id=f"reminder_{chat_id}_{int(time.time())}",
+                              replace_existing=False)
+        else:
+            import asyncio
+            asyncio.get_event_loop().call_later(delay * 60,
+                lambda: asyncio.ensure_future(_send_reminder()))
         await _reply(update, f"Напомню через {delay} мин.")
 
 
@@ -1737,7 +1788,7 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                                       f"{task.title}\nP{task.priority}\n{_link_task(task.id, user_id=task.assignee.id)}")
                             await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify, parse_mode="HTML")
                         except Exception:
-                            pass
+                            logger.exception(f"Failed to notify assignee in group for task '{task.title}'")
 
                 _group_sessions[key]["active"] = False
 
@@ -1746,10 +1797,12 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                 _group_sessions[key]["active"] = False
 
             elif action == "set_reminder":
-                delay = int(result.get("delay_minutes", 30))
+                try:
+                    delay = int(result.get("delay_minutes", 30))
+                except (ValueError, TypeError):
+                    delay = 30
                 msg = result.get("message", "Напоминание")
                 chat_id = update.effective_user.id
-                import asyncio
 
                 async def _send_group_reminder():
                     from telegram import Bot
@@ -1757,10 +1810,22 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                         bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
                         await bot_inst.send_message(chat_id=chat_id, text=f"Напоминание:\n{msg}")
                     except Exception:
-                        pass
+                        logger.exception(f"Failed to send group reminder to {chat_id}")
 
-                loop = asyncio.get_event_loop()
-                loop.call_later(delay * 60, lambda: asyncio.ensure_future(_send_group_reminder()))
+                from apscheduler.triggers.date import DateTrigger
+                import datetime as dt
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo(config.TIMEZONE)
+                run_at = dt.datetime.now(tz) + dt.timedelta(minutes=delay)
+                scheduler = _get_scheduler()
+                if scheduler:
+                    scheduler.add_job(_send_group_reminder, trigger=DateTrigger(run_date=run_at),
+                                      id=f"reminder_{chat_id}_{int(time.time())}",
+                                      replace_existing=False)
+                else:
+                    import asyncio
+                    asyncio.get_event_loop().call_later(delay * 60,
+                        lambda: asyncio.ensure_future(_send_group_reminder()))
                 await update.message.reply_text(f"Напомню через {delay} мин.")
                 _group_sessions[key]["active"] = False
 
@@ -1777,16 +1842,13 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await update.message.reply_text("Ошибка обработки. Попробуй ещё раз.")
         except Exception:
-            pass
-
-
-ADMIN_USERNAME = "ttzzsshh"
+            logger.exception("Failed to send error message in group chat")
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin panel — only for @ttzzsshh."""
+    """Admin panel — only for configured admin username."""
     username = (update.effective_user.username or "").lower()
-    if username != ADMIN_USERNAME:
+    if username != config.ADMIN_TELEGRAM_USERNAME.lower():
         await update.message.reply_text("Доступ запрещён.")
         return
     context.user_data["admin_mode"] = True

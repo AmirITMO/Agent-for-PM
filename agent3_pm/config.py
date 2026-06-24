@@ -35,6 +35,8 @@ class Config:
 
     TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Moscow")
 
+    ADMIN_TELEGRAM_USERNAME: str = os.getenv("ADMIN_TELEGRAM_USERNAME", "ttzzsshh")
+
     def __post_init__(self):
         raw = os.getenv("ADMIN_TELEGRAM_IDS", "")
         if raw and not self.ADMIN_TELEGRAM_IDS:

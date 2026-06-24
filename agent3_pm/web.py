@@ -139,7 +139,15 @@ def _set_auth_cookies(response, user_id: int):
 
 
 def _hash_password(password: str) -> str:
-    return hashlib.sha256(f"{password}:{config.SECRET_KEY}".encode()).hexdigest()
+    import bcrypt
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _check_password(password: str, hashed: str) -> bool:
+    import bcrypt
+    if not hashed.startswith("$2"):
+        return hashlib.sha256(f"{password}:{config.SECRET_KEY}".encode()).hexdigest() == hashed
+    return bcrypt.checkpw(password.encode(), hashed.encode())
 
 
 @app.get("/enter/{user_id}")
@@ -195,7 +203,7 @@ async def login_post(request: Request, session: AsyncSession = Depends(get_sessi
         return RedirectResponse("/login?error=invalid", status_code=303)
     if hasattr(user, "is_active") and not user.is_active:
         return RedirectResponse("/login?error=blocked", status_code=303)
-    if user.password_hash != _hash_password(password):
+    if not _check_password(password, user.password_hash):
         return RedirectResponse("/login?error=invalid", status_code=303)
     response = RedirectResponse("/board", status_code=303)
     _set_auth_cookies(response, user.id)
@@ -503,7 +511,10 @@ async def update_task_status_api(task_id: int, request: Request,
     redirect = form.get("redirect", "/board")
     if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
         redirect = "/board"
-    await repo.update_task_status(session, task_id, TaskStatus(status))
+    new_status = TaskStatus(status)
+    task = await repo.update_task_status(session, task_id, new_status)
+    if task and new_status == TaskStatus.DONE:
+        await _notify_managers_done(session, task)
     return RedirectResponse(redirect, status_code=303)
 
 
@@ -575,11 +586,14 @@ async def _notify_managers_done(session, task):
         managers = await repo.get_managers(session)
         assignee = task.assignee.name if task.assignee else "не назначен"
         project = task.project.name if task.project else "—"
-        text = (f"Задача выполнена\n\n{task.title}\nПроект: {project}\n"
-                f"Исполнитель: {assignee}\n\n{_abs_url_simple(f'/task/{task.id}')}")
+        link = _abs_url_simple(f"/task/{task.id}")
+        text = (f"Задача выполнена\n\n<b>{task.title}</b>\nПроект: {project}\n"
+                f"Исполнитель: {assignee}\n\n"
+                f'<a href="{link}">Открыть задачу</a>')
         for m in managers:
             if m.telegram_id:
-                await bot.send_message(chat_id=m.telegram_id, text=text)
+                await bot.send_message(chat_id=m.telegram_id, text=text,
+                                       parse_mode="HTML", disable_web_page_preview=True)
     except Exception:
         import logging
         logging.getLogger(__name__).exception("notify done failed")

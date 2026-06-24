@@ -1,7 +1,7 @@
 """
 Автоматизированные тесты для 40 тест-кейсов Agent 3 PM Tracker.
 Покрывает: БД (repository), бизнес-логику (bot), веб-эндпоинты (web),
-вотчеры (kb_watcher, github_watcher), модели, форматирование.
+вотчеры (kb_watcher), модели, форматирование.
 
 Тесты НЕ требуют OPENAI_API_KEY или Telegram — моки где нужно.
 Запуск: PYTHONPATH=. python -m pytest tests/test_all_tc.py -v
@@ -1433,11 +1433,13 @@ class TestWebSecurity:
         assert _verify_enter_token(1, tok) is False
 
     def test_password_hashing(self):
-        from agent3_pm.web import _hash_password
+        from agent3_pm.web import _hash_password, _check_password
         h1 = _hash_password("test123")
         h2 = _hash_password("test123")
-        assert h1 == h2
-        assert _hash_password("other") != h1
+        assert h1 != h2  # bcrypt: unique salt each time
+        assert _check_password("test123", h1)
+        assert _check_password("test123", h2)
+        assert not _check_password("other", h1)
 
 
 # ── Web routes existence ──
@@ -1747,19 +1749,6 @@ class TestKBWatcherEdgeCases:
     def test_parse_prompt_bugs_has_json_format(self):
         from agent3_pm.kb_watcher import PARSE_PROMPT_BUGS
         assert '"is_bug": true' in PARSE_PROMPT_BUGS
-
-
-# ── GitHub Watcher ──
-
-class TestGitHubWatcher:
-    def test_github_watcher_seen_files_set(self):
-        from agent3_pm.github_watcher import _seen_files
-        assert isinstance(_seen_files, set)
-
-    def test_github_constants(self):
-        from agent3_pm.github_watcher import GITHUB_REPO, GITHUB_PATH
-        assert "bugs" in GITHUB_PATH
-        assert len(GITHUB_REPO) > 0
 
 
 # ── Config ──
