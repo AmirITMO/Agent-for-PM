@@ -605,7 +605,7 @@ async def _notify_task_updated(session, task, updater_id: int | None,
 
         # Notify current assignee (if different from updater)
         if task.assignee and task.assignee.telegram_id and task.assignee_id != updater_id:
-            text = (f"Твоя задача обновлена пользователем {updater_name}\n\n"
+            text = (f"Изменение по задаче от {updater_name}\n\n"
                     f"<b>{task.title}</b>\n"
                     f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
             await bot.send_message(chat_id=task.assignee.telegram_id, text=text,
@@ -638,13 +638,14 @@ async def _notify_assignee(session, task, creator_name: str | None = None):
         by = f" от {creator_name}" if creator_name else ""
         project = task.project.name if task.project else "—"
         text = (f"Тебе назначена задача{by}\n\n"
-                f"{task.title}\n"
+                f"<b>{task.title}</b>\n"
                 f"Проект: {project}\n"
                 f"Приоритет: P{task.priority}\n"
-                f"{_abs_url_simple(f'/task/{task.id}')}")
+                f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
         if task.due_date:
             text += f"\nДедлайн: {task.due_date.strftime('%d.%m.%Y')}"
-        await bot.send_message(chat_id=task.assignee.telegram_id, text=text)
+        await bot.send_message(chat_id=task.assignee.telegram_id, text=text,
+                               parse_mode="HTML", disable_web_page_preview=True)
     except Exception:
         import logging
         logging.getLogger(__name__).exception("notify assignee failed")

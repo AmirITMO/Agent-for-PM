@@ -675,11 +675,13 @@ async def _finalize_approval(message, context, batch_id: str, batch: dict):
                     from telegram import Bot
                     try:
                         bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
-                        text = (f"Тебе назначена задача\n\n{task.title}\n"
+                        text = (f"Тебе назначена задача\n\n<b>{task.title}</b>\n"
                                 f"P{task.priority}\n{_link_task(task.id, user_id=task.assignee.id)}")
-                        await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=text, parse_mode="HTML")
+                        await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=text,
+                                                    parse_mode="HTML", disable_web_page_preview=True)
+                        logger.info(f"Approval notify sent to {task.assignee.name}")
                     except Exception:
-                        pass
+                        logger.exception(f"Failed approval notify to assignee_id={assignee_id}")
 
             created += 1
 
@@ -891,18 +893,23 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Notify assignee
         if assignee_id and assignee_id != (user.id if user else None):
-            from agent3_pm.repository import get_task_by_id as _get_task
-            task = await _get_task(session, task.id)
-            if task and task.assignee and task.assignee.telegram_id:
-                from telegram import Bot
-                try:
+            try:
+                from agent3_pm.repository import get_task_by_id as _get_task
+                task = await _get_task(session, task.id)
+                if task and task.assignee and task.assignee.telegram_id:
+                    from telegram import Bot
                     bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
-                    base = config.WEB_BASE_URL.rstrip("/")
                     notify_text = (f"Тебе назначена задача от {user.name if user else '—'}\n\n"
-                                   f"{task.title}\nP{task.priority}\n{_link_task(task.id, user_id=task.assignee.id)}")
-                    await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify_text, parse_mode="HTML")
-                except Exception:
-                    pass
+                                   f"<b>{task.title}</b>\nP{task.priority}\n{_link_task(task.id, user_id=task.assignee.id)}")
+                    await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify_text,
+                                                parse_mode="HTML", disable_web_page_preview=True)
+                    logger.info(f"Notify sent to {task.assignee.name} for task '{task.title}'")
+                else:
+                    logger.warning(f"Cannot notify assignee_id={assignee_id}: task={task is not None}, "
+                                   f"assignee={task.assignee if task else None}, "
+                                   f"tg_id={task.assignee.telegram_id if task and task.assignee else None}")
+            except Exception:
+                logger.exception(f"Failed to notify assignee_id={assignee_id}")
 
     context.user_data.pop("pending_task", None)
     context.user_data.pop("pending_files", None)
@@ -1136,11 +1143,12 @@ async def _notify_task_updated_bot(session, task, updater, old_assignee_id: int 
         updater_name = updater.name if updater else "Кто-то"
 
         if task.assignee and task.assignee.telegram_id and task.assignee_id != updater_id:
-            text = (f"Твоя задача обновлена пользователем {updater_name}\n\n"
+            text = (f"Изменение по задаче от {updater_name}\n\n"
                     f"<b>{task.title}</b>\n{_link_task(task.id, user_id=task.assignee.id)}")
             await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=text,
                                         parse_mode="HTML", disable_web_page_preview=True)
             notified.add(task.assignee_id)
+            logger.info(f"Update notify sent to {task.assignee.name} for '{task.title}'")
 
         if old_assignee_id and old_assignee_id != task.assignee_id and old_assignee_id not in notified:
             from agent3_pm.repository import get_user_by_id
@@ -1150,6 +1158,7 @@ async def _notify_task_updated_bot(session, task, updater, old_assignee_id: int 
                         f"<b>{task.title}</b>\n{_link_task(task.id, user_id=old_user.id)}")
                 await bot_inst.send_message(chat_id=old_user.telegram_id, text=text,
                                             parse_mode="HTML", disable_web_page_preview=True)
+                logger.info(f"Reassign notify sent to {old_user.name}")
     except Exception:
         logger.exception("notify task update failed")
 
