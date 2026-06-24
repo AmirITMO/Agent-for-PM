@@ -66,26 +66,26 @@
                 <input type="checkbox" name="is_bug" value="1" id="dBug" {% if task.is_bug %}checked{% endif %}>
                 <label for="dBug" style="margin:0;">Баг (красная метка)</label>
             </div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px;">
-                <div style="display:flex; gap:8px;">
-                    {% if task.status.value not in ['done', 'approved'] %}
-                    <form method="post" action="/api/tasks/{{ task.id }}/done" style="display:inline;">
-                        <input type="hidden" name="redirect" value="{{ back_url }}">
-                        <button type="submit" class="btn btn-green">Выполнено</button>
-                    </form>
-                    {% endif %}
-                    <form method="post" action="/api/tasks/{{ task.id }}/delete" style="display:inline;"
-                          onsubmit="return confirm('Удалить задачу?')">
-                        <input type="hidden" name="redirect" value="{{ back_url }}">
-                        <button type="submit" class="btn" style="background:#c62828;color:#fff;">Удалить</button>
-                    </form>
-                </div>
-                <div style="display:flex; gap:10px;">
-                    <a href="{{ back_url }}" class="btn btn-secondary" style="text-decoration:none;">Назад</a>
-                    <button type="submit" class="btn btn-primary">Сохранить</button>
-                </div>
+            <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:12px;">
+                <a href="{{ back_url }}" class="btn btn-secondary" style="text-decoration:none;">Назад</a>
+                <button type="submit" class="btn btn-primary">Сохранить</button>
             </div>
         </form>
+
+        <!-- Кнопки вне основной формы (HTML не позволяет вложенные формы) -->
+        <div style="display:flex; gap:8px; margin-top:12px;">
+            {% if task.status.value not in ['done', 'approved'] %}
+            <form method="post" action="/api/tasks/{{ task.id }}/done">
+                <input type="hidden" name="redirect" value="{{ back_url }}">
+                <button type="submit" class="btn btn-green">Выполнено</button>
+            </form>
+            {% endif %}
+            <form method="post" action="/api/tasks/{{ task.id }}/delete"
+                  onsubmit="return confirm('Удалить задачу?')">
+                <input type="hidden" name="redirect" value="{{ back_url }}">
+                <button type="submit" class="btn" style="background:#c62828;color:#fff;">Удалить</button>
+            </form>
+        </div>
     </div>
 
     <!-- Comments -->
