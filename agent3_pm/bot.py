@@ -264,9 +264,27 @@ def _clean_html(text: str) -> str:
 
 
 async def _reply(update: Update, text: str, reply_markup=None):
+    clean = _clean_html(text)
+
+    # Callback + inline-кнопки → редактируем то же сообщение (не спамим новыми)
+    if update.callback_query and isinstance(reply_markup, InlineKeyboardMarkup):
+        try:
+            await update.callback_query.edit_message_text(
+                clean, parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup, disable_web_page_preview=True)
+            return
+        except Exception:
+            pass
+
+    # Callback без inline-кнопок → убираем старые кнопки
+    if update.callback_query:
+        try:
+            await update.callback_query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
     msg = update.message or (update.callback_query and update.callback_query.message)
     if msg:
-        clean = _clean_html(text)
         try:
             await msg.reply_text(clean, parse_mode=ParseMode.HTML,
                                  reply_markup=reply_markup, disable_web_page_preview=True)
@@ -361,17 +379,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "files_yes":
         await query.answer()
         context.user_data["waiting_files"] = True
-        await query.message.reply_text("Отправь файлы. Когда закончишь — нажми кнопку.",
+        await query.edit_message_text("Отправь файлы. Когда закончишь — нажми кнопку.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Готово", callback_data="files_done")]]))
 
     elif data == "files_no":
         await query.answer()
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         await _execute_create(update, context)
 
     elif data == "files_done":
         await query.answer()
         context.user_data["waiting_files"] = False
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         await _execute_create(update, context)
 
     # Pick buttons — feed answer back to smart assistant
@@ -417,15 +443,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from agent3_pm.kb_watcher import get_batch
         batch = get_batch(batch_id)
         if not batch:
-            await query.message.reply_text("Этот пакет задач уже обработан.")
+            try:
+                await query.edit_message_text("Этот пакет задач уже обработан.")
+            except Exception:
+                pass
             return
         if batch["locked_by"] is not None:
-            await query.message.reply_text("Задачи уже взял другой сотрудник.")
+            try:
+                await query.edit_message_text("Задачи уже взял другой сотрудник.")
+            except Exception:
+                pass
             return
         batch["locked_by"] = update.effective_user.id
         batch["current_idx"] = 0
         context.user_data["approval_batch"] = batch_id
-        await _send_approval_card(query.message, batch_id, batch)
+        await _send_approval_card(query, batch_id, batch)
 
     elif data.startswith("approve_ok_"):
         await query.answer()
@@ -436,9 +468,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         batch["current_idx"] += 1
         if batch["current_idx"] >= len(batch["tasks"]):
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
             await _finalize_approval(query.message, context, batch_id, batch)
         else:
-            await _send_approval_card(query.message, batch_id, batch)
+            await _send_approval_card(query, batch_id, batch)
 
     elif data.startswith("approve_edit_"):
         await query.answer()
@@ -446,16 +482,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from agent3_pm.kb_watcher import get_batch as _gb
         b = _gb(batch_id)
         if not b or b["locked_by"] != update.effective_user.id:
-            await query.message.reply_text("Только взявший на утверждение может редактировать.")
+            try:
+                await query.edit_message_text("Только взявший на утверждение может редактировать.")
+            except Exception:
+                pass
             return
         context.user_data["editing_batch"] = batch_id
-        await query.message.reply_text("Опиши изменения текстом или голосовым.")
+        try:
+            await query.edit_message_text("Опиши изменения текстом или голосовым.")
+        except Exception:
+            pass
 
 
 # ── KB Approval helpers ──
 
-async def _send_approval_card(message, batch_id: str, batch: dict):
-    """Send current task card for approval."""
+async def _send_approval_card(query_or_msg, batch_id: str, batch: dict):
+    """Show task card for approval — edit existing message if from callback."""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     idx = batch["current_idx"]
     task = batch["tasks"][idx]
@@ -474,11 +516,19 @@ async def _send_approval_card(message, batch_id: str, batch: dict):
     lines.append(f"Проект: {task.get('project_name') or 'не указан'}")
     lines.append(f"Этап: {task.get('status') or 'не указан'}")
 
+    text = "\n".join(lines)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("Редактировать", callback_data=f"approve_edit_{batch_id}"),
          InlineKeyboardButton("Утвердить", callback_data=f"approve_ok_{batch_id}")],
     ])
-    await message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    # Если вызвано из callback → редактируем то же сообщение
+    if hasattr(query_or_msg, "edit_message_text"):
+        try:
+            await query_or_msg.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+            return
+        except Exception:
+            pass
+    await query_or_msg.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
 
 async def _finalize_approval(message, context, batch_id: str, batch: dict):
