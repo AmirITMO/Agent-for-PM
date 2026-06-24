@@ -760,4 +760,4 @@ class TestDescription:
     def test_description_in_bot_card(self):
         """Карточка в боте должна показывать description."""
         src = open("agent3_pm/bot.py", encoding="utf-8").read()
-        assert 'result.get("description")' in src or "result.get('description')" in src
+        assert 'td.get("description")' in src or 'td.get(\'description\')' in src

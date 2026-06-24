@@ -114,12 +114,21 @@ async def check_deadlines(bot: Bot):
             if already_sent:
                 continue
 
-            if days_over >= 3:
-                urgency = f"Просрочено {days_over} дней!"
-            elif days_over >= 1:
-                urgency = f"Просрочено {days_over} д."
+            if task.is_overdue and task.due_date:
+                days_over_actual = (today - task.due_date).days
+                if days_over_actual >= 3:
+                    urgency = f"Просрочено {days_over_actual} дн.!"
+                elif days_over_actual >= 1:
+                    urgency = f"Просрочено {days_over_actual} дн."
+                else:
+                    urgency = "Просрочено"
+            elif task.due_date and task.due_date == today:
+                urgency = "Дедлайн СЕГОДНЯ"
+            elif task.due_date and (task.due_date - today).days == 1:
+                urgency = "Дедлайн ЗАВТРА"
             else:
-                urgency = "Дедлайн скоро"
+                days_left = (task.due_date - today).days if task.due_date else 0
+                urgency = f"До дедлайна {days_left} дн."
 
             text = (f"<b>{urgency}</b>\n\n{task.title}"
                     f"\nP{task.priority}"

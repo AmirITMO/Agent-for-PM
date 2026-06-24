@@ -400,7 +400,50 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         await _execute_create(update, context)
 
-    # Pick buttons — feed answer back to smart assistant
+    # ── Create flow: deterministic field collection ──
+    elif data.startswith("crt_proj_"):
+        await query.answer()
+        proj_id = int(data.replace("crt_proj_", ""))
+        async with AsyncSessionLocal() as session:
+            proj = await get_project_by_id(session, proj_id)
+            if proj and context.user_data.get("pending_task") is not None:
+                context.user_data["pending_task"]["project_name"] = proj.name
+        await _ask_next_missing_field(update, context)
+
+    elif data.startswith("crt_status_"):
+        await query.answer()
+        status = data.replace("crt_status_", "")
+        if context.user_data.get("pending_task") is not None:
+            context.user_data["pending_task"]["status"] = status
+        await _ask_next_missing_field(update, context)
+
+    elif data.startswith("crt_prio_"):
+        await query.answer()
+        prio = int(data.replace("crt_prio_", ""))
+        if context.user_data.get("pending_task") is not None:
+            context.user_data["pending_task"]["priority"] = prio
+            context.user_data["pending_task"]["_priority_confirmed"] = True
+        await _ask_next_missing_field(update, context)
+
+    elif data.startswith("crt_user_"):
+        await query.answer()
+        val = data.replace("crt_user_", "")
+        td = context.user_data.get("pending_task")
+        if td is not None:
+            if val == "none":
+                td["assignee_name"] = None
+                td["_assignee_confirmed"] = True
+            else:
+                uid = int(val)
+                async with AsyncSessionLocal() as session:
+                    from agent3_pm.repository import get_user_by_id as _gui
+                    u = await _gui(session, uid)
+                    if u:
+                        td["assignee_name"] = u.name
+                        td["_assignee_confirmed"] = True
+        await _ask_next_missing_field(update, context)
+
+    # Pick buttons — feed answer back to smart assistant (for GPT clarify flow)
     elif data.startswith("pick_proj_"):
         await query.answer()
         proj_id = int(data.split("_")[2])
@@ -1070,6 +1113,88 @@ async def _notify_task_updated_bot(session, task, updater, old_assignee_id: int 
         logger.exception("notify task update failed")
 
 
+async def _ask_next_missing_field(update, context, ctx_data=None):
+    """Детерминированно спрашиваем обязательные поля по одному. Когда все заполнены — карточка."""
+    td = context.user_data.get("pending_task", {})
+
+    # 1. Проект (доска)
+    if not td.get("project_name"):
+        projects = ctx_data.get("projects", []) if ctx_data else []
+        if not projects:
+            async with AsyncSessionLocal() as s:
+                projects = [{"id": p.id, "name": p.name} for p in await get_all_projects(s)]
+        buttons = [[InlineKeyboardButton(p["name"], callback_data=f"crt_proj_{p['id']}")] for p in projects]
+        await _reply(update, "На какую доску поставить задачу?", InlineKeyboardMarkup(buttons))
+        return
+
+    # 2. Этап
+    if not td.get("status"):
+        buttons = [
+            [InlineKeyboardButton("Бэклог", callback_data="crt_status_backlog"),
+             InlineKeyboardButton("К выполнению", callback_data="crt_status_todo")],
+            [InlineKeyboardButton("В работе", callback_data="crt_status_wip"),
+             InlineKeyboardButton("Планирование", callback_data="crt_status_planning")],
+        ]
+        await _reply(update, "На какой этап поставить?", InlineKeyboardMarkup(buttons))
+        return
+
+    # 3. Приоритет
+    if td.get("_priority_confirmed") is not True and td.get("_priority_asked") is not True:
+        td["_priority_asked"] = True
+        buttons = [
+            [InlineKeyboardButton("P0 — срочно", callback_data="crt_prio_0"),
+             InlineKeyboardButton("P1 — высокий", callback_data="crt_prio_1")],
+            [InlineKeyboardButton("P2 — обычный", callback_data="crt_prio_2"),
+             InlineKeyboardButton("P3 — низкий", callback_data="crt_prio_3")],
+        ]
+        await _reply(update, "Какой приоритет?", InlineKeyboardMarkup(buttons))
+        return
+
+    # 4. Исполнитель
+    if not td.get("assignee_name") and td.get("_assignee_confirmed") is not True:
+        td["_assignee_confirmed"] = True
+        users = ctx_data.get("users", []) if ctx_data else []
+        if not users:
+            async with AsyncSessionLocal() as s:
+                users = [{"id": u.id, "name": u.name} for u in await get_all_users(s)]
+        rows = []
+        row = []
+        for u in users:
+            row.append(InlineKeyboardButton(u["name"], callback_data=f"crt_user_{u['id']}"))
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")])
+        await _reply(update, "Кому назначить задачу?", InlineKeyboardMarkup(rows))
+        return
+
+    # Все поля заполнены → показываем карточку
+    await _show_final_card(update, context)
+
+
+async def _show_final_card(update, context):
+    """Показать финальную карточку задачи с кнопкой файлов."""
+    td = context.user_data.get("pending_task", {})
+    lines = [f"<b>{td.get('title', '—')}</b>\n"]
+    if td.get("description"):
+        lines.append(f"{td['description']}\n")
+    lines.append(f"Исполнитель: {td.get('assignee_name') or 'без ответственного'}")
+    lines.append(f"Приоритет: P{td.get('priority', DEFAULT_PRIORITY)}")
+    if td.get("is_bug"):
+        lines.append("Баг")
+    if td.get("due_date"):
+        lines.append(f"Дедлайн: {td['due_date']}")
+    lines.append(f"Проект: {td.get('project_name', '—')}")
+    lines.append(f"Этап: {td.get('status', '—')}")
+    lines.append("\nПрикрепить файлы?")
+    await _reply(update, "\n".join(lines),
+        InlineKeyboardMarkup([
+            [InlineKeyboardButton("Да", callback_data="files_yes"),
+             InlineKeyboardButton("Нет, создать", callback_data="files_no")]]))
+
+
 async def _send_typing(update):
     """Send 'typing...' indicator."""
     try:
@@ -1180,31 +1305,12 @@ async def _process_smart(update, context, text, session, user):
         await _reply(update, msg)
 
     elif action == "create_task":
-        # Нормализуем priority: null/None → 2 (P2 по умолчанию)
         if result.get("priority") is None:
             result["priority"] = DEFAULT_PRIORITY
         context.user_data["pending_task"] = result
         context.user_data["pending_files"] = []
-
-        lines = [f"<b>{result.get('title', '—')}</b>\n"]
-        if result.get("description"):
-            lines.append(f"{result['description']}\n")
-        if result.get("assignee_name"):
-            lines.append(f"Исполнитель: {result['assignee_name']}")
-        lines.append(f"Приоритет: P{result['priority']}")
-        if result.get("is_bug"):
-            lines.append("Баг")
-        if result.get("due_date"):
-            lines.append(f"Дедлайн: {result['due_date']}")
-        if result.get("project_name"):
-            lines.append(f"Проект: {result['project_name']}")
-        if result.get("status"):
-            lines.append(f"Этап: {result['status']}")
-        lines.append("\nПрикрепить файлы?")
-        await _reply(update, "\n".join(lines),
-            InlineKeyboardMarkup([
-                [InlineKeyboardButton("Да", callback_data="files_yes"),
-                 InlineKeyboardButton("Нет, создать", callback_data="files_no")]]))
+        # Детерминированная валидация — спрашиваем недостающие поля по одному
+        await _ask_next_missing_field(update, context, ctx_data)
 
     elif action == "update_task":
         task_id = result.get("task_id")
