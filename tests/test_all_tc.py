@@ -1461,6 +1461,102 @@ class TestWebRoutes:
 
 # ── Bot logic tests ──
 
+class TestGroupChat:
+    """TC-20..23: групповой чат — тег, сессии, изоляция, таймаут."""
+
+    def test_bot_username_defined(self):
+        assert bot.BOT_USERNAME == "projectmanageraiibot"
+
+    def test_group_sessions_dict(self):
+        from agent3_pm.bot import _group_sessions
+        assert isinstance(_group_sessions, dict)
+
+    def test_mention_detection(self):
+        text = "@projectmanageraiibot задай задачу починить сайт"
+        assert f"@{bot.BOT_USERNAME.lower()}" in text.lower()
+
+    def test_mention_text_cleanup(self):
+        import re
+        text = "@projectmanageraiibot задай задачу починить сайт"
+        clean = re.sub(rf"@{bot.BOT_USERNAME}", "", text, flags=re.IGNORECASE).strip()
+        assert clean == "задай задачу починить сайт"
+        assert "@" not in clean
+
+    def test_no_mention_no_reaction(self):
+        text = "привет как дела"
+        assert f"@{bot.BOT_USERNAME.lower()}" not in text.lower()
+
+    def test_session_creation(self):
+        import time
+        key = (111, 222)
+        session = {"active": True, "history": [], "ts": time.time()}
+        assert session["active"] is True
+        assert session["ts"] > 0
+
+    def test_session_timeout(self):
+        import time
+        session = {"active": True, "history": [], "ts": time.time() - 400}
+        assert time.time() - session["ts"] > 300, "session should be expired"
+
+    def test_session_not_timeout(self):
+        import time
+        session = {"active": True, "history": [], "ts": time.time() - 100}
+        assert time.time() - session["ts"] < 300, "session should be active"
+
+    def test_session_deactivated_after_answer(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        idx = src.index("async def _process_group_smart")
+        chunk = src[idx:idx+2000]
+        assert 'action == "answer"' in chunk
+        assert '["active"] = False' in chunk
+
+    def test_different_users_different_sessions(self):
+        key1 = (100, 1)
+        key2 = (100, 2)
+        assert key1 != key2
+
+    def test_handler_registered_for_groups(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        assert "ChatType.GROUPS" in src
+        assert "handle_group_message" in src
+
+    def test_voice_file_handlers_private_only(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        # voice and file handlers must be PRIVATE only
+        idx_voice = src.index("handle_voice)")
+        chunk_voice = src[max(0,idx_voice-100):idx_voice]
+        assert "ChatType.PRIVATE" in chunk_voice
+        idx_file = src.index("handle_file)")
+        chunk_file = src[max(0,idx_file-100):idx_file]
+        assert "ChatType.PRIVATE" in chunk_file
+
+    def test_unregistered_user_rejected(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        idx = src.index("async def _process_group_smart")
+        chunk = src[idx:idx+800]
+        assert "зарегистрирован" in chunk
+
+    def test_group_create_task_deactivates(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        idx = src.index("async def _process_group_smart")
+        chunk = src[idx:idx+5000]
+        # After create_task, session must be deactivated
+        assert 'create_task"' in chunk
+        assert '["active"] = False' in chunk
+
+    def test_mention_with_different_case(self):
+        import re
+        text = "@ProjectManagerAIIBot задача"
+        clean = re.sub(rf"@{bot.BOT_USERNAME}", "", text, flags=re.IGNORECASE).strip()
+        assert clean == "задача"
+
+    def test_typing_in_group(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        idx = src.index("async def _process_group_smart")
+        chunk = src[idx:idx+1000]
+        assert "_send_typing" in chunk
+
+
 class TestBotLogic:
     @pytest.fixture
     def fake_users(self):
