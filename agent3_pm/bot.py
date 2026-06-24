@@ -535,6 +535,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await _send_approval_card(query, batch_id, batch)
 
+    elif data.startswith("approve_del_"):
+        await query.answer()
+        batch_id = data.replace("approve_del_", "")
+        from agent3_pm.kb_watcher import get_batch as _gbd
+        batch = _gbd(batch_id)
+        if not batch or batch["locked_by"] != update.effective_user.id:
+            return
+        idx = batch["current_idx"]
+        removed = batch["tasks"].pop(idx)
+        try:
+            await query.edit_message_text(f"Задача удалена: {removed.get('title', '—')}")
+        except Exception:
+            pass
+        if not batch["tasks"]:
+            from agent3_pm.kb_watcher import remove_batch
+            remove_batch(batch_id)
+            context.user_data.pop("approval_batch", None)
+            await query.message.reply_text("Все задачи удалены из пакета.", reply_markup=_menu_kb())
+        else:
+            if batch["current_idx"] >= len(batch["tasks"]):
+                batch["current_idx"] = len(batch["tasks"]) - 1
+            # Отправляем новое сообщение (старое уже отредактировано в «Удалена»)
+            await _send_approval_card(query.message, batch_id, batch)
+
     elif data.startswith("approve_edit_"):
         await query.answer()
         batch_id = data.replace("approve_edit_", "")
@@ -579,6 +603,7 @@ async def _send_approval_card(query_or_msg, batch_id: str, batch: dict):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("Редактировать", callback_data=f"approve_edit_{batch_id}"),
          InlineKeyboardButton("Утвердить", callback_data=f"approve_ok_{batch_id}")],
+        [InlineKeyboardButton("Удалить задачу", callback_data=f"approve_del_{batch_id}")],
     ])
     # Если вызвано из callback → редактируем то же сообщение
     if hasattr(query_or_msg, "edit_message_text"):

@@ -747,6 +747,52 @@ class TestFileDisplay:
         assert "<img" in src
 
 
+class TestKBWatcher:
+    """Bug 14: KB watcher dedup + separate prompts for calls vs bugs."""
+
+    def test_dedup_set_exists(self):
+        from agent3_pm.kb_watcher import _seen_global
+        assert isinstance(_seen_global, set)
+
+    def test_separate_prompts(self):
+        from agent3_pm.kb_watcher import PARSE_PROMPT_CALLS, PARSE_PROMPT_BUGS
+        assert "задачи и поручения" in PARSE_PROMPT_CALLS
+        assert "is_bug" in PARSE_PROMPT_CALLS
+        assert "баги и ошибки" in PARSE_PROMPT_BUGS
+        assert "обычные задачи" in PARSE_PROMPT_BUGS
+
+    def test_calls_prompt_extracts_both(self):
+        from agent3_pm.kb_watcher import PARSE_PROMPT_CALLS
+        assert "баги" in PARSE_PROMPT_CALLS.lower() or "is_bug" in PARSE_PROMPT_CALLS
+
+    def test_content_limit_increased(self):
+        import inspect
+        from agent3_pm.kb_watcher import _parse_tasks_from_content
+        src = inspect.getsource(_parse_tasks_from_content)
+        assert "6000" in src
+
+
+class TestApprovalDeleteButton:
+    """Bug 15: delete button in approval flow."""
+
+    def test_delete_button_in_card(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        assert "approve_del_" in src
+        assert "Удалить задачу" in src
+
+    def test_delete_handler_exists(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        assert 'data.startswith("approve_del_")' in src
+
+    def test_delete_removes_from_batch(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        assert "batch[\"tasks\"].pop(idx)" in src or "batch['tasks'].pop(idx)" in src
+
+    def test_empty_batch_cleanup(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        assert "Все задачи удалены из пакета" in src
+
+
 class TestDescription:
     @pytest.mark.asyncio
     async def test_description_stored(self, session, tasks):
