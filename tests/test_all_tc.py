@@ -560,6 +560,32 @@ class TestTaskIntent:
 # Team report detection
 # ═══════════════════════════════════════
 
+class TestMyTasksViaAsk:
+    """TC-баг 3: 'мои задачи' через 'Спросить' показывает чужие задачи."""
+
+    @pytest.mark.asyncio
+    async def test_my_tasks_only_mine(self, session, users, tasks):
+        """Арсений с 1 задачей должен видеть только свою."""
+        out = await bot._format_user_tasks(session, users["arseny"], users["arseny"])
+        assert "Написать в ЛС Амиру" in out
+        assert "Почистить Zoom" not in out
+        assert "Задача 1 Ване" not in out
+
+    @pytest.mark.asyncio
+    async def test_no_tasks_user(self, session, users, tasks):
+        """Миша без задач — должен получить 'нет задач'."""
+        out = await bot._format_user_tasks(session, users["misha"], users["misha"])
+        assert "нет задач" in out
+
+    @pytest.mark.asyncio
+    async def test_unassigned_not_shown(self, session, users, projects, tasks):
+        """Неназначенная задача не должна показываться у кого-либо."""
+        await repo.create_task(session, "Бесхозная задача", projects["dev"].id,
+                               status=TaskStatus.TODO, assignee_id=None)
+        out = await bot._format_user_tasks(session, users["arseny"], users["arseny"])
+        assert "Бесхозная задача" not in out
+
+
 class TestTeamReport:
     def test_report_detected(self):
         assert bot._is_team_report("сделай отчет у кого какие задачи сейчас")

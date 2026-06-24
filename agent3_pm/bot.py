@@ -801,6 +801,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("pending_task"):
         text = (update.message.text or "").strip()
         if text and text not in ("Мои задачи", "Просрочки", "Задать задачу", "Спросить по задачам", "Инструкции"):
+            await _send_typing(update)
             await _edit_pending_task(update, context, text)
             return
 
@@ -954,6 +955,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             if text:
                 await _reply(update, f"Распознано: {text}")
+                await _send_typing(update)
                 await _edit_pending_task(update, context, text)
             else:
                 await _reply(update, "Не распознано. Попробуй текстом.")
@@ -988,14 +990,35 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _process_smart(update, context, text, session, user)
 
 
+async def _send_typing(update):
+    """Send 'typing...' indicator."""
+    try:
+        msg = update.message or (update.callback_query and update.callback_query.message)
+        if msg:
+            await msg.chat.send_action("typing")
+    except Exception:
+        pass
+
+
 async def _process_smart(update, context, text, session, user):
     """Send message to smart assistant and handle the action."""
     mode = context.user_data.get("chat_mode", "ask")
+
+    # Показываем «печатает…» пока GPT думает
+    await _send_typing(update)
+
     ctx_data = await _get_context_data(session, user)
 
     # Детерминированные перехватчики (отчёт/список/удаление) — ТОЛЬКО в режиме «Спросить».
     # В режиме «Задать задачу» ничего не перехватываем — всё идёт на создание.
     if mode == "ask":
+        # «мои задачи» / «какие у меня задачи» / «что у меня» — детерминированно
+        low = text.lower()
+        if ("мои задач" in low or "у меня" in low or "мне задач" in low
+                or "у меня задач" in low or "мои активн" in low):
+            await _reply(update, await _format_user_tasks(session, user, user))
+            return
+
         if _is_team_report(text):
             await _send_team_report(update, session, user)
             return
@@ -1019,6 +1042,7 @@ async def _process_smart(update, context, text, session, user):
 
     history = context.user_data.get("chat_history", [])
 
+    await _send_typing(update)
     result = await smart_assistant(text, ctx_data, history, mode=mode)
 
     # Save to history
@@ -1288,6 +1312,7 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
             ctx_data = await _get_context_data(session, user)
             history = _group_sessions[key].get("history", [])
 
+            await _send_typing(update)
             result = await smart_assistant(text, ctx_data, history)
             logger.info(f"Group smart result: {result}")
 
@@ -1403,7 +1428,10 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 def create_bot_application() -> Application:
-    app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+    app = (Application.builder()
+           .token(config.TELEGRAM_BOT_TOKEN)
+           .concurrent_updates(True)
+           .build())
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(
