@@ -576,11 +576,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
             return
-        context.user_data["editing_batch"] = batch_id
-        try:
-            await query.edit_message_text("Опиши изменения текстом или голосовым.")
-        except Exception:
-            pass
+        # Сразу запускаем валидацию полей кнопками (как при создании)
+        # Сбрасываем невалидные поля чтобы переспросить
+        idx = b["current_idx"]
+        td = b["tasks"][idx].copy()
+        # project_name может быть невалидным (GPT написал "маркетинг" вместо "MarketAI Marketing")
+        td.pop("_priority_confirmed", None)
+        td.pop("_priority_asked", None)
+        td.pop("_assignee_confirmed", None)
+        context.user_data["_approval_validating"] = batch_id
+        context.user_data["pending_task"] = td
+        await _ask_next_missing_field(update, context)
 
 
 # ── KB Approval helpers ──
