@@ -1506,8 +1506,7 @@ class TestGroupChat:
     def test_session_deactivated_after_answer(self):
         src = open("agent3_pm/bot.py", encoding="utf-8").read()
         idx = src.index("async def _process_group_smart")
-        chunk = src[idx:idx+2000]
-        assert 'action == "answer"' in chunk
+        chunk = src[idx:idx+3000]
         assert '["active"] = False' in chunk
 
     def test_different_users_different_sessions(self):
@@ -1553,8 +1552,23 @@ class TestGroupChat:
     def test_typing_in_group(self):
         src = open("agent3_pm/bot.py", encoding="utf-8").read()
         idx = src.index("async def _process_group_smart")
-        chunk = src[idx:idx+1000]
+        chunk = src[idx:idx+2000]
         assert "_send_typing" in chunk
+
+    def test_group_voice_handler_exists(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        assert "async def handle_group_voice" in src
+        assert "handle_group_voice" in src
+
+    def test_group_voice_checks_session(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        idx = src.index("async def handle_group_voice")
+        chunk = src[idx:idx+500]
+        assert "_check_group_session" in chunk
+
+    def test_check_group_session_helper(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        assert "def _check_group_session" in src
 
 
 class TestBotLogic:

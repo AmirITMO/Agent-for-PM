@@ -1542,14 +1542,28 @@ BOT_USERNAME = "projectmanageraiibot"
 _group_sessions: dict[tuple[int, int], dict] = {}
 
 
+def _check_group_session(chat_id: int, user_id: int):
+    """Check if user has active group session. Returns session or None."""
+    import time
+    key = (chat_id, user_id)
+    session_data = _group_sessions.get(key)
+    if not session_data or not session_data["active"]:
+        return None
+    if time.time() - session_data.get("ts", 0) > 300:
+        _group_sessions.pop(key, None)
+        return None
+    session_data["ts"] = time.time()
+    return session_data
+
+
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle messages in group chats. React only to @bot mentions and follow-ups."""
-    if not update.message or not update.message.text:
+    """Handle text messages in group chats. React only to @bot mentions and follow-ups."""
+    if not update.message:
         return
     if update.effective_chat.type not in ("group", "supergroup"):
         return
 
-    text = update.message.text
+    text = update.message.text or ""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     key = (chat_id, user_id)
@@ -1567,17 +1581,43 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("Слушаю. Опиши задачу или спроси о задачах.")
         return
 
-    session_data = _group_sessions.get(key)
-    if not session_data or not session_data["active"]:
+    if not text:
         return
 
-    # Таймаут: 5 минут без активности — сессия деактивируется
-    import time
-    if time.time() - session_data.get("ts", 0) > 300:
-        _group_sessions.pop(key, None)
+    session_data = _check_group_session(chat_id, user_id)
+    if not session_data:
         return
-    session_data["ts"] = time.time()
 
+    await _process_group_smart(update, context, text, key)
+
+
+async def handle_group_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle voice messages in group chats — only for users with active session."""
+    if not update.message or update.effective_chat.type not in ("group", "supergroup"):
+        return
+    session_data = _check_group_session(update.effective_chat.id, update.effective_user.id)
+    if not session_data:
+        return
+
+    voice = update.message.voice or update.message.audio
+    if not voice:
+        return
+
+    key = (update.effective_chat.id, update.effective_user.id)
+    file = await voice.get_file()
+    tmp = tempfile.NamedTemporaryFile(suffix=".ogg", delete=False)
+    tmp.close()
+    await file.download_to_drive(tmp.name)
+    await update.message.reply_text("Распознаю...")
+    text = await transcribe_voice(tmp.name)
+    try:
+        os.remove(tmp.name)
+    except OSError:
+        pass
+    if not text:
+        await update.message.reply_text("Не удалось распознать. Попробуй текстом.")
+        return
+    await update.message.reply_text(f"Распознано: {text}")
     await _process_group_smart(update, context, text, key)
 
 
@@ -1877,6 +1917,8 @@ def create_bot_application() -> Application:
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_message))
+    app.add_handler(MessageHandler(
+        (filters.VOICE | filters.AUDIO) & filters.ChatType.GROUPS, handle_group_voice))
     app.add_handler(MessageHandler(
         (filters.VOICE | filters.AUDIO) & filters.ChatType.PRIVATE, handle_voice))
     app.add_handler(MessageHandler(
