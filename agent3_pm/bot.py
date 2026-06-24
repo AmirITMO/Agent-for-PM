@@ -722,12 +722,16 @@ async def _handle_approval_edit(update: Update, context: ContextTypes.DEFAULT_TY
     task = batch["tasks"][idx]
 
     # Use GPT to apply edits
+    await _send_typing(update)
+
+    # Убираем внутренние ключи из JSON для GPT
+    task_clean = {k: v for k, v in task.items() if not k.startswith("_")}
     edit_prompt = f"""Текущая задача:
-{json.dumps(task, ensure_ascii=False)}
+{json.dumps(task_clean, ensure_ascii=False)}
 
 Пользователь просит изменить: {text}
 
-Верни обновлённый JSON задачи (тот же формат). Только JSON."""
+Верни обновлённый JSON задачи (тот же формат). Только JSON, без markdown."""
 
     try:
         client = _get_client_openai()
@@ -735,6 +739,7 @@ async def _handle_approval_edit(update: Update, context: ContextTypes.DEFAULT_TY
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": edit_prompt}],
             temperature=0, max_tokens=500,
+            response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content.strip()
         if raw.startswith("```"):
@@ -742,9 +747,13 @@ async def _handle_approval_edit(update: Update, context: ContextTypes.DEFAULT_TY
             if raw.startswith("json"):
                 raw = raw[4:]
         updated = json.loads(raw)
-        updated["_source_url"] = task.get("_source_url")
+        # Сохраняем внутренние ключи
+        for k, v in task.items():
+            if k.startswith("_"):
+                updated[k] = v
         batch["tasks"][idx] = updated
     except Exception:
+        logger.exception("Approval edit GPT failed")
         await _reply(update, "Не удалось обработать изменения. Попробуй ещё раз.")
         return
 
