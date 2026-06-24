@@ -443,6 +443,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             proj = await get_project_by_id(session, proj_id)
             if proj and context.user_data.get("pending_task") is not None:
                 context.user_data["pending_task"]["project_name"] = proj.name
+                context.user_data["pending_task"]["_project_confirmed"] = True
         await _ask_next_missing_field(update, context)
 
     elif data.startswith("crt_status_"):
@@ -450,6 +451,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = data.replace("crt_status_", "")
         if context.user_data.get("pending_task") is not None:
             context.user_data["pending_task"]["status"] = status
+            context.user_data["pending_task"]["_status_confirmed"] = True
         await _ask_next_missing_field(update, context)
 
     elif data.startswith("crt_prio_"):
@@ -1246,15 +1248,15 @@ async def _ask_next_missing_field(update, context, ctx_data=None):
     valid_proj_names = {p.name for p in real_projects}
     valid_statuses = {"backlog", "planning", "todo", "wip"}
 
-    # 1. Проект — ОБЯЗАТЕЛЬНО спрашиваем если GPT не угадал точное имя из БД
-    if not td.get("project_name") or td["project_name"] not in valid_proj_names:
+    # 1. Проект — ВСЕГДА спрашиваем кнопками
+    if not td.get("_project_confirmed"):
         td["project_name"] = None
         buttons = [[InlineKeyboardButton(p.name, callback_data=f"crt_proj_{p.id}")] for p in real_projects]
         await _reply(update, "На какую доску поставить задачу?", InlineKeyboardMarkup(buttons))
         return
 
-    # 2. Этап — ОБЯЗАТЕЛЬНО спрашиваем если GPT не вернул валидный статус
-    if not td.get("status") or td["status"] not in valid_statuses:
+    # 2. Этап — ВСЕГДА спрашиваем кнопками
+    if not td.get("_status_confirmed"):
         td["status"] = None
         buttons = [
             [InlineKeyboardButton("Бэклог", callback_data="crt_status_backlog"),
