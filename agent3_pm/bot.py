@@ -369,6 +369,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
+    logger.info(f"Callback received: {data}")
 
     if data == "noop":
         await query.answer()
@@ -1991,4 +1992,9 @@ def create_bot_application() -> Application:
         (filters.Document.ALL | filters.PHOTO) & filters.ChatType.PRIVATE, handle_file))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
+
+    async def error_handler(update, context):
+        logger.exception(f"Unhandled exception: {context.error}", exc_info=context.error)
+
+    app.add_error_handler(error_handler)
     return app
