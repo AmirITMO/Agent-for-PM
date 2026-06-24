@@ -1596,6 +1596,22 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                 return
 
             ctx_data = await _get_context_data(session, user)
+
+            # Детерминированный отчёт по команде — без GPT
+            if _is_team_report(text):
+                await _send_team_report(update, session, user)
+                _group_sessions[key]["active"] = False
+                return
+
+            # Список задач конкретного сотрудника
+            all_users_list = await get_all_users(session)
+            intent, target = _task_intent(text, all_users_list)
+            if target and intent == "list":
+                reply = await _format_user_tasks(session, target, user)
+                await update.message.reply_text(reply, parse_mode="HTML", disable_web_page_preview=True)
+                _group_sessions[key]["active"] = False
+                return
+
             history = _group_sessions[key].get("history", [])
 
             await _send_typing(update)
@@ -1611,10 +1627,18 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
             action = result.get("action", "answer")
 
             if action == "clarify":
-                await update.message.reply_text(result.get("message", "Уточни."))
+                msg = _clean_html(result.get("message", "Уточни."))
+                try:
+                    await update.message.reply_text(msg, parse_mode="HTML")
+                except Exception:
+                    await update.message.reply_text(msg)
 
             elif action == "answer":
-                await update.message.reply_text(result.get("message", ""))
+                msg = _clean_html(result.get("message", ""))
+                try:
+                    await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
+                except Exception:
+                    await update.message.reply_text(msg)
                 _group_sessions[key]["active"] = False
 
             elif action == "create_task":
