@@ -152,7 +152,9 @@ class TestTC2TC40Links:
 
     def test_link_task_with_autologin(self):
         html = bot._link_task(42, "Открыть задачу", user_id=5)
-        assert "/enter/5?next=/task/42" in html
+        assert "/enter/5?" in html
+        assert "tok=" in html
+        assert "next=/task/42" in html
         assert ">Открыть задачу<" in html
 
     def test_link_task_without_user(self):

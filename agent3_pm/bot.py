@@ -1,5 +1,8 @@
 import json
 import os
+import time
+import hmac
+import hashlib
 import tempfile
 import logging
 from telegram import (
@@ -30,18 +33,29 @@ from agent3_pm.task_agent import smart_assistant, transcribe_voice
 logger = logging.getLogger(__name__)
 
 
+def _make_enter_token(user_id: int) -> str:
+    ts = str(int(time.time()))
+    sig = hmac.new(config.SECRET_KEY.encode(),
+                   f"{user_id}:{ts}".encode(),
+                   hashlib.sha256).hexdigest()[:16]
+    return f"{ts}.{sig}"
+
+
 def _enter_url(user_id: int) -> str:
-    return f"{config.WEB_BASE_URL.rstrip('/')}/enter/{user_id}"
+    tok = _make_enter_token(user_id)
+    return f"{config.WEB_BASE_URL.rstrip('/')}/enter/{user_id}?tok={tok}"
 
 
 def _link_board(user_id: int) -> str:
-    return f'<a href="{config.WEB_BASE_URL.rstrip("/")}/enter/{user_id}">Доска</a>'
+    tok = _make_enter_token(user_id)
+    return f'<a href="{config.WEB_BASE_URL.rstrip("/")}/enter/{user_id}?tok={tok}">Доска</a>'
 
 
 def _link_task(task_id: int, label: str = "Открыть задачу", user_id: int | None = None) -> str:
     base = config.WEB_BASE_URL.rstrip("/")
     if user_id:
-        return f'<a href="{base}/enter/{user_id}?next=/task/{task_id}">{label}</a>'
+        tok = _make_enter_token(user_id)
+        return f'<a href="{base}/enter/{user_id}?tok={tok}&next=/task/{task_id}">{label}</a>'
     return f'<a href="{base}/task/{task_id}">{label}</a>'
 
 
@@ -189,7 +203,8 @@ async def _send_team_report(update, session, asker):
         for t in tasks:
             st = t.status.value if hasattr(t.status, "value") else t.status
             bug = "[Баг] " if t.is_bug else ""
-            link = f'<a href="{base}/enter/{asker.id}?next=/task/{t.id}">открыть</a>'
+            tok = _make_enter_token(asker.id)
+            link = f'<a href="{base}/enter/{asker.id}?tok={tok}&next=/task/{t.id}">открыть</a>'
             lines.append(f"• {bug}{t.title} — {st} — {link}")
         blocks.append("\n".join(lines))
 
@@ -220,7 +235,8 @@ async def _format_user_tasks(session, target, asker) -> str:
     for i, t in enumerate(tasks, 1):
         st = t.status.value if hasattr(t.status, "value") else t.status
         bug = "[Баг] " if t.is_bug else ""
-        link = f'<a href="{base}/enter/{asker.id}?next=/task/{t.id}">открыть</a>'
+        tok = _make_enter_token(asker.id)
+        link = f'<a href="{base}/enter/{asker.id}?tok={tok}&next=/task/{t.id}">открыть</a>'
         lines.append(f"{i}. {bug}{t.title} — P{t.priority} — {st} — {link}")
     return "\n".join(lines)
 
@@ -311,7 +327,7 @@ async def _get_context_data(session, user) -> dict:
             "project": t.project.name if t.project else None,
             "assignee": t.assignee.name if t.assignee else "не назначен",
             # автологин-ссылка для того, кто спрашивает
-            "link": f"{base_url}/enter/{user.id}?next=/task/{t.id}",
+            "link": f"{base_url}/enter/{user.id}?tok={_make_enter_token(user.id)}&next=/task/{t.id}",
         }
 
     return {

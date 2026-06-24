@@ -1,13 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ task.title }}{% endblock %}
 {% block header_title %}Задача{% endblock %}
-{% block nav %}
-<a href="/board">Канбан</a>
-<a href="/my">Мои задачи</a>
-{% if can_manage %}<a href="/employees">Сотрудники</a>{% endif %}
-<a href="/settings">Настройки</a>
-{% if current_user %}<span class="nav-sep">|</span><a href="/logout">Выйти</a>{% endif %}
-{% endblock %}
 
 {% block content %}
 <div style="max-width:720px; margin:24px auto; padding:0 20px;">

@@ -6,69 +6,90 @@
     <title>{% block title %}MarketAI Tracker{% endblock %}</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fff; color: #1a1a1a; font-size: 14px; }
-        .header { border-bottom: 1px solid #eee; padding: 10px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-        .header h1 { font-size: 18px; font-weight: 600; }
-        .header nav { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-        .header nav a { color: #666; text-decoration: none; font-size: 13px; }
-        .header nav a:hover { color: #000; }
-        .header nav a.active { color: #000; font-weight: 600; }
-        .nav-sep { color: #e5e5e5; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fafafa; color: #1a1a1a; font-size: 14px; }
+        .header { background: #fff; border-bottom: 1px solid #e8e8e8; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; height: 52px; }
+        .header h1 { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
+        .header nav { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .header nav a { color: #666; text-decoration: none; font-size: 13px; padding: 6px 10px; border-radius: 6px; transition: background 0.15s, color 0.15s; }
+        .header nav a:hover { background: #f0f0f0; color: #000; }
+        .header nav a.active { background: #1a1a1a; color: #fff; }
+        .nav-sep { color: #e0e0e0; margin: 0 2px; }
+        .nav-user { font-size: 12px; color: #888; padding: 6px 0; }
 
-        .kanban-wrap { display: flex; gap: 0; overflow-x: auto; min-height: calc(100vh - 95px); }
+        .kanban-wrap { display: flex; gap: 0; overflow-x: auto; min-height: calc(100vh - 52px); background: #fff; }
         .kanban-col { min-width: 210px; max-width: 230px; flex-shrink: 0; border-right: 1px solid #f0f0f0; }
         .col-head { padding: 14px 16px 8px; display: flex; align-items: center; gap: 6px; }
-        .col-title { font-size: 12px; font-weight: 700; }
-        .col-count { font-size: 12px; color: #999; }
+        .col-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: #555; }
+        .col-count { font-size: 11px; color: #aaa; background: #f0f0f0; padding: 1px 6px; border-radius: 10px; }
         .col-body { padding: 0 8px 8px; }
 
-        .card { background: #fff; border: 1px solid #f0f0f0; border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; cursor: pointer; position: relative; }
-        .card:hover { border-color: #ddd; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
+        .card { background: #fff; border: 1px solid #eee; border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; cursor: pointer; position: relative; transition: box-shadow 0.15s, border-color 0.15s; }
+        .card:hover { border-color: #d0d0d0; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
         .card-priority { position: absolute; left: -1px; top: 12px; width: 4px; height: 16px; border-radius: 0 2px 2px 0; background: #e74c3c; }
         .card-title { font-size: 13px; font-weight: 500; line-height: 1.35; }
         .card-title a { color: inherit; text-decoration: none; }
         .card-desc { font-size: 11px; color: #999; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .card-meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+        .card-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
         .card-hours { font-size: 11px; color: #888; }
         .card-due { font-size: 10px; padding: 1px 5px; border-radius: 3px; }
         .card-due-overdue { background: #fde8e8; color: #c62828; }
         .card-due-normal { color: #888; }
-        .card-avatar { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: #eee; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 600; color: #777; }
+        .card-avatar { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: #e8e8e8; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 600; color: #666; }
         .tag-pr { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #f0f0f0; color: #777; }
         .tag-bug { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #fde8e8; color: #c62828; font-weight: 600; }
 
         .add-task { padding: 8px 16px; font-size: 12px; color: #999; cursor: pointer; }
         .add-task:hover { color: #333; }
 
-        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 100; justify-content: center; align-items: center; }
+        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 100; justify-content: center; align-items: center; }
         .modal-overlay.active { display: flex; }
-        .modal { background: #fff; border-radius: 12px; padding: 24px; max-width: 460px; width: 90%; max-height: 90vh; overflow-y: auto; }
+        .modal { background: #fff; border-radius: 12px; padding: 24px; max-width: 460px; width: 90%; max-height: 90vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
         .modal h2 { font-size: 16px; margin-bottom: 16px; }
-        .form-group { margin-bottom: 10px; }
-        .form-group label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 3px; color: #555; }
-        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 7px 9px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; font-family: inherit; }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 4px; color: #555; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; font-family: inherit; transition: border-color 0.15s; }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: #1a1a1a; }
         .form-group textarea { height: 60px; resize: vertical; }
         .checkbox-row { display: flex; align-items: center; gap: 6px; }
         .checkbox-row input { width: auto; }
-        .btn { padding: 7px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; }
+        .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.15s; }
         .btn-primary { background: #1a1a1a; color: #fff; }
         .btn-primary:hover { background: #333; }
         .btn-secondary { background: #f0f0f0; color: #333; }
+        .btn-secondary:hover { background: #e4e4e4; }
         .btn-green { background: #16a34a; color: #fff; }
+        .btn-green:hover { background: #15803d; }
         .btn-sm { padding: 4px 10px; font-size: 12px; }
 
-        table.list { width: 100%; border-collapse: collapse; background: #fff; }
+        table.list { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; }
         table.list th { background: #f7f7f7; text-align: left; padding: 10px 14px; font-size: 12px; color: #555; font-weight: 600; }
         table.list td { padding: 10px 14px; font-size: 13px; border-top: 1px solid #f0f0f0; }
+        table.list tr:hover { background: #fafafa; }
         .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; }
-        .members-bar { padding: 8px 24px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; gap: 8px; font-size: 12px; color: #666; flex-wrap: wrap; }
-        .member-chip { background: #f0f0f0; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
+
+        .login-card { max-width: 380px; margin: 80px auto; padding: 32px; background: #fff; border-radius: 12px; border: 1px solid #e8e8e8; box-shadow: 0 2px 12px rgba(0,0,0,0.04); }
+        .login-card h2 { font-size: 20px; margin-bottom: 20px; text-align: center; }
+        .login-card .btn-primary { width: 100%; margin-top: 8px; }
+        .login-error { color: #c62828; font-size: 13px; margin-bottom: 12px; text-align: center; }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>{% block header_title %}MarketAI Tracker{% endblock %}</h1>
-        <nav>{% block nav %}{% endblock %}</nav>
+        <nav>
+        {% if current_user %}
+            {% for p in nav_projects %}
+            <a href="/board?project_id={{ p.id }}" class="{% if nav_active == 'board_' ~ p.id|string %}active{% endif %}">{{ p.name }}</a>
+            {% endfor %}
+            <span class="nav-sep">|</span>
+            <a href="/my" class="{% if nav_active == 'my' %}active{% endif %}">Мои задачи</a>
+            {% if can_manage %}<a href="/employees" class="{% if nav_active == 'employees' %}active{% endif %}">Сотрудники</a>{% endif %}
+            <a href="/settings" class="{% if nav_active == 'settings' %}active{% endif %}">Настройки</a>
+            <span class="nav-sep">|</span>
+            <span class="nav-user">{{ current_user.name }}</span>
+            <a href="/logout">Выйти</a>
+        {% endif %}
+        </nav>
     </div>
     {% block content %}{% endblock %}
     {% block scripts %}{% endblock %}

@@ -1,13 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Настройки — MarketAI Tracker{% endblock %}
 {% block header_title %}Настройки{% endblock %}
-{% block nav %}
-<a href="/board">Канбан</a>
-<a href="/my">Мои задачи</a>
-{% if can_manage %}<a href="/employees">Сотрудники</a>{% endif %}
-<a href="/settings" class="active">Настройки</a>
-{% if current_user %}<span class="nav-sep">|</span><a href="/logout">Выйти</a>{% endif %}
-{% endblock %}
 
 {% block content %}
 <div style="max-width:600px; margin:24px auto; padding:0 20px;">

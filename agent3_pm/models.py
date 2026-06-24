@@ -73,6 +73,7 @@ class User(Base):
     role = Column(SAEnum(UserRole, values_callable=lambda e: [x.value for x in e]),
                   default=UserRole.EMPLOYEE, nullable=False)
     position = Column(String(100), nullable=True)
+    password_hash = Column(String(255), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     tasks = relationship("Task", back_populates="assignee", foreign_keys="Task.assignee_id")

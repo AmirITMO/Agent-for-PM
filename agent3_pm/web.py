@@ -1,5 +1,7 @@
 import os
 import uuid
+import time
+import hmac
 import hashlib
 import datetime
 from pathlib import Path
@@ -29,6 +31,18 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 async def get_session():
     async with AsyncSessionLocal() as session:
         yield session
+
+
+async def _nav_context(request: Request, session: AsyncSession, nav_active: str = "") -> dict:
+    """Build shared navigation context for all templates."""
+    user = await _current_user(request, session)
+    projects = await repo.get_all_projects(session)
+    return {
+        "current_user": user,
+        "can_manage": _can_manage(user),
+        "nav_projects": projects,
+        "nav_active": nav_active,
+    }
 
 
 # ── Labels ──
@@ -96,49 +110,137 @@ async def index(request: Request, session: AsyncSession = Depends(get_session)):
     user = await _current_user(request, session)
     if user:
         return RedirectResponse("/board")
-    return templates.TemplateResponse(request, "welcome.html", {})
+    return templates.TemplateResponse(request, "welcome.html", {
+        "current_user": None, "can_manage": False, "nav_projects": [], "nav_active": "",
+    })
+
+
+def _verify_enter_token(user_id: int, tok: str) -> bool:
+    """Validate HMAC token: ts.sig, sig must match and ts within 24h."""
+    try:
+        ts_str, sig = tok.split(".", 1)
+        expected = hmac.new(config.SECRET_KEY.encode(),
+                            f"{user_id}:{ts_str}".encode(),
+                            hashlib.sha256).hexdigest()[:16]
+        if not hmac.compare_digest(sig, expected):
+            return False
+        if abs(time.time() - int(ts_str)) > 86400:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _set_auth_cookies(response, user_id: int):
+    response.set_cookie("uid", str(user_id), max_age=86400 * 30)
+    response.set_cookie("auth", _make_token(user_id), max_age=86400 * 30)
+
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(f"{password}:{config.SECRET_KEY}".encode()).hexdigest()
 
 
 @app.get("/enter/{user_id}")
-async def enter(user_id: int, next: str | None = None,
+async def enter(user_id: int, request: Request, tok: str | None = None,
+                next: str | None = None,
                 session: AsyncSession = Depends(get_session)):
+    if not tok or not _verify_enter_token(user_id, tok):
+        return RedirectResponse("/login", status_code=303)
     user = await repo.get_user_by_id(session, user_id)
     if not user:
         raise HTTPException(404, "Пользователь не найден")
     redirect_to = next if next and next.startswith("/") else "/board"
+    # If user has no password, redirect to set-password page
+    if not user.password_hash:
+        redirect_to = "/set-password"
     response = RedirectResponse(redirect_to, status_code=303)
-    response.set_cookie("uid", str(user.id), max_age=86400 * 30)
-    response.set_cookie("auth", _make_token(user.id), max_age=86400 * 30)
+    _set_auth_cookies(response, user.id)
     return response
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, error: str | None = None,
+                     session: AsyncSession = Depends(get_session)):
+    user = await _current_user(request, session)
+    if user:
+        return RedirectResponse("/board", status_code=303)
+    return templates.TemplateResponse(request, "login.html", {
+        "current_user": None, "can_manage": False,
+        "nav_projects": [], "nav_active": "",
+        "error": error,
+    })
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login_post(request: Request, session: AsyncSession = Depends(get_session)):
+    form = await request.form()
+    username = (form.get("username") or "").strip().lstrip("@")
+    password = (form.get("password") or "").strip()
+    if not username or not password:
+        return RedirectResponse("/login?error=empty", status_code=303)
+
+    # Find user by telegram_username or name
+    user = await repo.get_user_by_telegram_username(session, username)
+    if not user:
+        # Try by name (case-insensitive partial match)
+        all_users = await repo.get_all_users(session)
+        for u in all_users:
+            if u.name.lower() == username.lower():
+                user = u
+                break
+    if not user or not user.password_hash:
+        return RedirectResponse("/login?error=invalid", status_code=303)
+    if user.password_hash != _hash_password(password):
+        return RedirectResponse("/login?error=invalid", status_code=303)
+    response = RedirectResponse("/board", status_code=303)
+    _set_auth_cookies(response, user.id)
+    return response
+
+
+@app.get("/set-password", response_class=HTMLResponse)
+async def set_password_page(request: Request, session: AsyncSession = Depends(get_session)):
+    user = await _current_user(request, session)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    projects = await repo.get_all_projects(session)
+    return templates.TemplateResponse(request, "set_password.html", {
+        "current_user": user, "can_manage": _can_manage(user),
+        "nav_projects": projects, "nav_active": "",
+    })
+
+
+@app.post("/set-password", response_class=RedirectResponse)
+async def set_password_post(request: Request, session: AsyncSession = Depends(get_session)):
+    user = await _current_user(request, session)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    form = await request.form()
+    pw = (form.get("password") or "").strip()
+    pw2 = (form.get("password2") or "").strip()
+    if not pw or len(pw) < 4 or pw != pw2:
+        projects = await repo.get_all_projects(session)
+        return templates.TemplateResponse(request, "set_password.html", {
+            "current_user": user, "can_manage": _can_manage(user),
+            "nav_projects": projects, "nav_active": "",
+            "error": "Пароли не совпадают или слишком короткие (мин. 4 символа)",
+        })
+    await repo.update_user(session, user.id, password_hash=_hash_password(pw))
+    return RedirectResponse("/board", status_code=303)
 
 
 @app.get("/logout")
 async def logout():
-    response = RedirectResponse("/", status_code=303)
-    response.delete_cookie("uid")
-    response.delete_cookie("auth")
+    response = RedirectResponse("/login", status_code=303)
+    response.set_cookie("uid", "", max_age=0)
+    response.set_cookie("auth", "", max_age=0)
     return response
 
 
 # ── Boards (kanban) ──
 
 async def _render_board(request, session, current, project_id, only_mine):
-    all_projects = await repo.get_all_projects(session)
+    projects = await repo.get_all_projects(session)
     users = await repo.get_all_users(session)
-
-    # Filter projects by board access (Level 1 sees all, others only with checkbox)
-    if current and not only_mine:
-        if is_level_1(current.position):
-            projects = all_projects
-        else:
-            my_board_ids = set()
-            for p in all_projects:
-                members = await repo.get_board_member_ids(session, p.id)
-                if current.id in members:
-                    my_board_ids.add(p.id)
-            projects = [p for p in all_projects if p.id in my_board_ids]
-    else:
-        projects = all_projects
 
     pid = project_id
     if not pid and projects and not only_mine:
@@ -156,19 +258,19 @@ async def _render_board(request, session, current, project_id, only_mine):
         tasks = await repo.get_all_tasks(session, **kwargs)
         columns[col] = [_task_to_dict(t) for t in tasks]
 
-    members = await repo.get_board_members(session, pid) if pid and not only_mine else []
-
+    nav_active = "my" if only_mine else (f"board_{pid}" if pid else "")
     return templates.TemplateResponse(request, "board.html", {
         "columns": columns,
         "kanban_columns": KANBAN_COLUMNS,
         "status_label": STATUS_LABEL_MAP,
         "projects": projects,
         "users": users,
-        "members": members,
         "selected_project_id": pid,
         "current_project": current_project,
         "current_user": current,
         "can_manage": _can_manage(current),
+        "nav_projects": projects,
+        "nav_active": nav_active,
         "only_mine": only_mine,
         "statuses": KANBAN_COLUMNS,
         "priorities": PRIORITY_LEVELS,
@@ -204,13 +306,11 @@ async def employees(request: Request, session: AsyncSession = Depends(get_sessio
         return RedirectResponse("/board")
     users = await repo.get_all_users(session)
     projects = await repo.get_all_projects(session)
-    access = {}
-    for p in projects:
-        access[p.id] = await repo.get_board_member_ids(session, p.id)
     return templates.TemplateResponse(request, "employees.html", {
-        "users": users, "projects": projects, "access": access,
+        "users": users, "projects": projects,
         "positions": POSITIONS, "position_groups": POSITION_GROUPS,
         "current_user": current, "can_manage": True,
+        "nav_projects": projects, "nav_active": "employees",
     })
 
 
@@ -262,6 +362,15 @@ async def delete_user_api(user_id: int, request: Request,
     return RedirectResponse("/employees", status_code=303)
 
 
+@app.post("/api/users/{user_id}/reset-password", response_class=RedirectResponse)
+async def reset_password_api(user_id: int, request: Request,
+                             session: AsyncSession = Depends(get_session)):
+    if not _can_manage(await _current_user(request, session)):
+        raise HTTPException(403, "Недостаточно прав")
+    await repo.update_user(session, user_id, password_hash=None)
+    return RedirectResponse("/employees", status_code=303)
+
+
 # ── Task detail (shareable) ──
 
 @app.get("/task/{task_id}", response_class=HTMLResponse)
@@ -280,6 +389,8 @@ async def task_detail(request: Request, task_id: int, back: str | None = None,
         "projects": projects,
         "current_user": current,
         "can_manage": _can_manage(current),
+        "nav_projects": projects,
+        "nav_active": "task",
         "status_label": STATUS_LABEL_MAP,
         "statuses": KANBAN_COLUMNS,
         "priorities": PRIORITY_LEVELS,
@@ -523,10 +634,12 @@ async def settings_page(request: Request, session: AsyncSession = Depends(get_se
     current = await _current_user(request, session)
     from agent3_pm.models import Settings
     settings = await repo.get_all_settings(session)
+    projects = await repo.get_all_projects(session)
     return templates.TemplateResponse(request, "settings.html", {
         "settings": settings, "labels": Settings.LABELS,
         "keys": list(Settings.LABELS.keys()), "current_user": current,
         "can_manage": _can_manage(current),
+        "nav_projects": projects, "nav_active": "settings",
     })
 
 
