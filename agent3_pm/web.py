@@ -73,6 +73,8 @@ async def _current_user(request: Request, session: AsyncSession):
         return None
     if not user or _make_token(user.id) != token:
         return None
+    if hasattr(user, "is_active") and not user.is_active:
+        return None
     return user
 
 
@@ -149,8 +151,9 @@ async def enter(user_id: int, request: Request, tok: str | None = None,
     user = await repo.get_user_by_id(session, user_id)
     if not user:
         raise HTTPException(404, "Пользователь не найден")
+    if hasattr(user, "is_active") and not user.is_active:
+        return RedirectResponse("/login?error=blocked", status_code=303)
     redirect_to = next if next and next.startswith("/") and not next.startswith("//") else "/board"
-    # If user has no password, redirect to set-password page
     if not user.password_hash:
         redirect_to = "/set-password"
     response = RedirectResponse(redirect_to, status_code=303)
@@ -190,6 +193,8 @@ async def login_post(request: Request, session: AsyncSession = Depends(get_sessi
                 break
     if not user or not user.password_hash:
         return RedirectResponse("/login?error=invalid", status_code=303)
+    if hasattr(user, "is_active") and not user.is_active:
+        return RedirectResponse("/login?error=blocked", status_code=303)
     if user.password_hash != _hash_password(password):
         return RedirectResponse("/login?error=invalid", status_code=303)
     response = RedirectResponse("/board", status_code=303)

@@ -362,6 +362,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         return
 
+    # Admin panel callbacks
+    if data.startswith("adm_"):
+        handled = await _admin_callback(update, context)
+        if handled:
+            return
+
     if data == "register":
         await query.answer()
         username = update.effective_user.username
@@ -1673,12 +1679,143 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
 
+ADMIN_USERNAME = "ttzzsshh"
+
+
+async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin panel — only for @ttzzsshh."""
+    username = (update.effective_user.username or "").lower()
+    if username != ADMIN_USERNAME:
+        await update.message.reply_text("Доступ запрещён.")
+        return
+    context.user_data["admin_mode"] = True
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Вайтлист сотрудников", callback_data="adm_whitelist")],
+        [InlineKeyboardButton("Заблокировать сотрудника", callback_data="adm_block")],
+        [InlineKeyboardButton("Разблокировать сотрудника", callback_data="adm_unblock")],
+    ])
+    await update.message.reply_text("<b>Админ-панель</b>\nУправление доступом сотрудников.", parse_mode="HTML",
+                                    reply_markup=kb)
+
+
+async def _admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Handle admin callbacks. Returns True if handled."""
+    query = update.callback_query
+    data = query.data
+    username = (update.effective_user.username or "").lower()
+    if username != ADMIN_USERNAME:
+        return False
+
+    if data == "adm_whitelist":
+        await query.answer()
+        async with AsyncSessionLocal() as session:
+            users = await get_all_users(session)
+        lines = ["<b>Вайтлист (активные сотрудники):</b>\n"]
+        blocked = []
+        for u in sorted(users, key=lambda x: x.name):
+            status = "✅" if (not hasattr(u, "is_active") or u.is_active) else "🚫"
+            tg = f"@{u.telegram_username}" if u.telegram_username else "—"
+            lines.append(f"{status} {u.name} ({u.position or '—'}) {tg}")
+            if hasattr(u, "is_active") and not u.is_active:
+                blocked.append(u.name)
+        if blocked:
+            lines.append(f"\nЗаблокировано: {len(blocked)}")
+        try:
+            await query.edit_message_text("\n".join(lines), parse_mode="HTML")
+        except Exception:
+            pass
+        return True
+
+    if data == "adm_block":
+        await query.answer()
+        async with AsyncSessionLocal() as session:
+            users = await get_all_users(session)
+        active = [u for u in users if not hasattr(u, "is_active") or u.is_active]
+        rows = []
+        for u in active:
+            rows.append([InlineKeyboardButton(f"🚫 {u.name}", callback_data=f"adm_doblock_{u.id}")])
+        rows.append([InlineKeyboardButton("← Назад", callback_data="adm_back")])
+        try:
+            await query.edit_message_text("Выбери сотрудника для <b>блокировки</b>:",
+                                          parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+        except Exception:
+            pass
+        return True
+
+    if data == "adm_unblock":
+        await query.answer()
+        async with AsyncSessionLocal() as session:
+            users = await get_all_users(session)
+        blocked = [u for u in users if hasattr(u, "is_active") and not u.is_active]
+        if not blocked:
+            try:
+                await query.edit_message_text("Нет заблокированных сотрудников.")
+            except Exception:
+                pass
+            return True
+        rows = []
+        for u in blocked:
+            rows.append([InlineKeyboardButton(f"✅ {u.name}", callback_data=f"adm_dounblock_{u.id}")])
+        rows.append([InlineKeyboardButton("← Назад", callback_data="adm_back")])
+        try:
+            await query.edit_message_text("Выбери сотрудника для <b>разблокировки</b>:",
+                                          parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+        except Exception:
+            pass
+        return True
+
+    if data.startswith("adm_doblock_"):
+        await query.answer()
+        uid = int(data.replace("adm_doblock_", ""))
+        async with AsyncSessionLocal() as session:
+            from agent3_pm.repository import update_user
+            user = await update_user(session, uid, is_active=False)
+            name = user.name if user else f"id={uid}"
+        try:
+            await query.edit_message_text(f"🚫 <b>{name}</b> заблокирован.\nДоступ к веб-трекеру закрыт.",
+                                          parse_mode="HTML")
+        except Exception:
+            pass
+        return True
+
+    if data.startswith("adm_dounblock_"):
+        await query.answer()
+        uid = int(data.replace("adm_dounblock_", ""))
+        async with AsyncSessionLocal() as session:
+            from agent3_pm.repository import update_user
+            user = await update_user(session, uid, is_active=True)
+            name = user.name if user else f"id={uid}"
+        try:
+            await query.edit_message_text(f"✅ <b>{name}</b> разблокирован.\nДоступ восстановлен.",
+                                          parse_mode="HTML")
+        except Exception:
+            pass
+        return True
+
+    if data == "adm_back":
+        await query.answer()
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Вайтлист сотрудников", callback_data="adm_whitelist")],
+            [InlineKeyboardButton("Заблокировать сотрудника", callback_data="adm_block")],
+            [InlineKeyboardButton("Разблокировать сотрудника", callback_data="adm_unblock")],
+        ])
+        try:
+            await query.edit_message_text("<b>Админ-панель</b>\nУправление доступом сотрудников.",
+                                          parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass
+        return True
+
+    return False
+
+
 def create_bot_application() -> Application:
     app = (Application.builder()
            .token(config.TELEGRAM_BOT_TOKEN)
            .concurrent_updates(True)
            .build())
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_message))

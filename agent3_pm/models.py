@@ -74,6 +74,7 @@ class User(Base):
                   default=UserRole.EMPLOYEE, nullable=False)
     position = Column(String(100), nullable=True)
     password_hash = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False, server_default="true")
     created_at = Column(DateTime, server_default=func.now())
 
     tasks = relationship("Task", back_populates="assignee", foreign_keys="Task.assignee_id")

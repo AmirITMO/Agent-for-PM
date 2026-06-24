@@ -9,6 +9,8 @@
     <div class="login-error">Неверный логин или пароль</div>
     {% elif error == 'empty' %}
     <div class="login-error">Заполните все поля</div>
+    {% elif error == 'blocked' %}
+    <div class="login-error">Ваш аккаунт заблокирован. Обратитесь к администратору.</div>
     {% endif %}
     <form method="post" action="/login">
         <div class="form-group">
