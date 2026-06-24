@@ -96,38 +96,75 @@
     </div>
 
     <!-- Comments -->
-    <h3 style="font-size:15px; margin-bottom:12px;">Комментарии ({{ task.comments|length }})</h3>
+    <div style="margin-top:24px;">
+        <h3 style="font-size:15px; margin-bottom:14px; color:#333;">Комментарии <span style="color:#999; font-weight:normal;">({{ task.comments|length }})</span></h3>
 
-    {% for c in task.comments %}
-    <div style="background:#f9f9f9; border-radius:8px; padding:12px 14px; margin-bottom:8px;">
-        <div style="font-size:12px; color:#888; margin-bottom:4px;">
-            {{ c.user.name if c.user else 'Аноним' }} · {{ c.created_at.strftime('%d.%m %H:%M') if c.created_at else '' }}
-        </div>
-        {% if c.text %}<div style="margin-bottom:6px; white-space:pre-wrap;">{{ c.text }}</div>{% endif %}
-        {% for a in c.attachments %}
-            {% if a.is_image %}
-            <a href="/uploads/{{ a.stored_name }}" target="_blank">
-                <img src="/uploads/{{ a.stored_name }}" style="max-width:100%; max-height:300px; border-radius:8px; margin-top:6px; display:block;">
-            </a>
-            {% else %}
-            <a href="/uploads/{{ a.stored_name }}" target="_blank" style="display:inline-block; margin-top:6px; padding:6px 10px; background:#fff; border:1px solid #ddd; border-radius:6px; font-size:12px; color:#1565c0; text-decoration:none;">{{ a.filename }}</a>
+        {% for c in task.comments %}
+        <div class="comment-card">
+            <div class="comment-header">
+                <span class="comment-avatar">{{ (c.user.name if c.user else 'A')[:1] }}</span>
+                <span class="comment-author">{{ c.user.name if c.user else 'Система' }}</span>
+                <span class="comment-date">{{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else '' }}</span>
+            </div>
+            {% if c.text %}<div class="comment-text">{{ c.text }}</div>{% endif %}
+            {% if c.attachments %}
+            <div class="comment-attachments">
+                {% for a in c.attachments %}
+                    {% if a.is_image %}
+                    <a href="/uploads/{{ a.stored_name }}" target="_blank" class="attachment-img">
+                        <img src="/uploads/{{ a.stored_name }}" alt="{{ a.filename }}">
+                    </a>
+                    {% elif a.filename.endswith('.pdf') %}
+                    <div class="attachment-pdf">
+                        <a href="/uploads/{{ a.stored_name }}" target="_blank" class="attachment-file pdf">PDF: {{ a.filename }}</a>
+                    </div>
+                    {% else %}
+                    <a href="/uploads/{{ a.stored_name }}" download="{{ a.filename }}" class="attachment-file">{{ a.filename }}</a>
+                    {% endif %}
+                {% endfor %}
+            </div>
             {% endif %}
+        </div>
+        {% else %}
+        <p style="color:#bbb; font-size:13px; padding:8px 0;">Пока нет комментариев.</p>
         {% endfor %}
     </div>
-    {% else %}
-    <p style="color:#aaa; font-size:13px;">Пока нет комментариев.</p>
-    {% endfor %}
 
     <!-- Add comment -->
-    <form method="post" action="/api/tasks/{{ task.id }}/comment" enctype="multipart/form-data"
-          style="margin-top:14px; background:#fff; border:1px solid #eee; border-radius:8px; padding:12px;">
-        <textarea name="text" placeholder="Написать комментарий..." style="width:100%; height:60px; border:1px solid #ddd; border-radius:6px; padding:8px; font-family:inherit; font-size:13px; resize:vertical;"></textarea>
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-            <input type="file" name="files" multiple>
+    <form id="commentForm" method="post" action="/api/tasks/{{ task.id }}/comment" enctype="multipart/form-data"
+          style="margin-top:16px; background:#fff; border:1px solid #e0e0e0; border-radius:10px; padding:14px;">
+        <textarea id="commentText" name="text" placeholder="Написать комментарий..." class="comment-input"></textarea>
+        <div id="pastePreview" style="display:none; margin:8px 0;"></div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <label for="fileInput" class="btn btn-secondary btn-sm" style="cursor:pointer; margin:0;">Прикрепить файл</label>
+                <input type="file" id="fileInput" name="files" multiple style="display:none;" onchange="showFileNames(this)">
+                <span id="fileNames" style="font-size:12px; color:#888;"></span>
+            </div>
             <button type="submit" class="btn btn-primary btn-sm">Отправить</button>
         </div>
+        <p style="font-size:11px; color:#bbb; margin-top:6px;">Ctrl+V — вставить скриншот из буфера</p>
     </form>
 </div>
+
+<style>
+.comment-card { background:#fafafa; border:1px solid #f0f0f0; border-radius:10px; padding:14px 16px; margin-bottom:10px; }
+.comment-header { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.comment-avatar { width:28px; height:28px; border-radius:50%; background:#1565c0; color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; flex-shrink:0; }
+.comment-author { font-size:13px; font-weight:600; color:#333; }
+.comment-date { font-size:11px; color:#aaa; margin-left:auto; }
+.comment-text { font-size:13px; line-height:1.5; color:#444; white-space:pre-wrap; word-break:break-word; }
+.comment-attachments { margin-top:8px; display:flex; flex-wrap:wrap; gap:8px; }
+.attachment-img img { max-width:100%; max-height:280px; border-radius:8px; display:block; cursor:pointer; transition:opacity .15s; }
+.attachment-img img:hover { opacity:.85; }
+.attachment-file { display:inline-flex; align-items:center; gap:4px; padding:6px 12px; background:#fff; border:1px solid #e0e0e0; border-radius:6px; font-size:12px; color:#1565c0; text-decoration:none; transition:background .15s; }
+.attachment-file:hover { background:#f0f4ff; }
+.attachment-file.pdf { border-color:#c62828; color:#c62828; }
+.attachment-file.pdf:hover { background:#fff0f0; }
+.attachment-pdf { width:100%; }
+.comment-input { width:100%; height:60px; border:1px solid #e0e0e0; border-radius:8px; padding:10px; font-family:inherit; font-size:13px; resize:vertical; transition:border-color .15s; }
+.comment-input:focus { outline:none; border-color:#1565c0; }
+</style>
 {% endblock %}
 
 {% block scripts %}
@@ -137,5 +174,46 @@ function copyShare() {
     el.select();
     document.execCommand('copy');
 }
+function showFileNames(input) {
+    var names = Array.from(input.files).map(function(f){return f.name;}).join(', ');
+    document.getElementById('fileNames').textContent = names;
+}
+// Ctrl+V paste images from clipboard
+var pastedFiles = [];
+document.getElementById('commentText').addEventListener('paste', function(e) {
+    var items = (e.clipboardData || e.originalEvent.clipboardData).items;
+    for (var i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+            var blob = items[i].getAsFile();
+            pastedFiles.push(blob);
+            var preview = document.getElementById('pastePreview');
+            var img = document.createElement('img');
+            img.src = URL.createObjectURL(blob);
+            img.style.cssText = 'max-width:120px;max-height:80px;border-radius:6px;margin-right:6px;';
+            preview.appendChild(img);
+            preview.style.display = 'flex';
+        }
+    }
+});
+document.getElementById('commentForm').addEventListener('submit', function(e) {
+    if (pastedFiles.length > 0) {
+        e.preventDefault();
+        var form = new FormData(this);
+        // Remove empty file inputs
+        form.delete('files');
+        // Add original files if any
+        var fileInput = document.getElementById('fileInput');
+        for (var i = 0; i < fileInput.files.length; i++) {
+            form.append('files', fileInput.files[i]);
+        }
+        // Add pasted images
+        pastedFiles.forEach(function(f, idx) {
+            form.append('files', f, 'paste_' + Date.now() + '_' + idx + '.png');
+        });
+        fetch(this.action, {method:'POST', body: form}).then(function(){
+            window.location.reload();
+        });
+    }
+});
 </script>
 {% endblock %}

@@ -355,7 +355,19 @@ async def update_task_api(task_id: int, request: Request,
         fields["project_id"] = int(proj_raw)
     if status:
         fields["status"] = TaskStatus(status)
+    task_before = await repo.get_task_by_id(session, task_id)
+    old_assignee_id = task_before.assignee_id if task_before else None
+
     await repo.update_task(session, task_id, **fields)
+
+    # Уведомить ответственного об обновлении (если обновил не он сам)
+    current = await _current_user(request, session)
+    updater_id = current.id if current else None
+    updater_name = current.name if current else "Кто-то"
+    task_after = await repo.get_task_by_id(session, task_id)
+    if task_after:
+        await _notify_task_updated(session, task_after, updater_id, updater_name, old_assignee_id)
+
     return RedirectResponse(redirect, status_code=303)
 
 
@@ -445,6 +457,39 @@ async def _notify_managers_done(session, task):
 
 def _abs_url_simple(path: str) -> str:
     return f"{config.WEB_BASE_URL.rstrip('/')}{path}"
+
+
+async def _notify_task_updated(session, task, updater_id: int | None,
+                               updater_name: str, old_assignee_id: int | None = None):
+    """Notify assignee when their task is updated by someone else."""
+    try:
+        if not config.TELEGRAM_BOT_TOKEN:
+            return
+        from telegram import Bot
+        bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        notified = set()
+
+        # Notify current assignee (if different from updater)
+        if task.assignee and task.assignee.telegram_id and task.assignee_id != updater_id:
+            text = (f"Твоя задача обновлена пользователем {updater_name}\n\n"
+                    f"<b>{task.title}</b>\n"
+                    f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
+            await bot.send_message(chat_id=task.assignee.telegram_id, text=text,
+                                   parse_mode="HTML", disable_web_page_preview=True)
+            notified.add(task.assignee_id)
+
+        # If assignee changed, notify the OLD assignee too
+        if old_assignee_id and old_assignee_id != task.assignee_id and old_assignee_id not in notified:
+            old_user = await repo.get_user_by_id(session, old_assignee_id)
+            if old_user and old_user.telegram_id and old_user.id != updater_id:
+                text = (f"Задача переназначена пользователем {updater_name}\n\n"
+                        f"<b>{task.title}</b>\n"
+                        f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
+                await bot.send_message(chat_id=old_user.telegram_id, text=text,
+                                       parse_mode="HTML", disable_web_page_preview=True)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("notify update failed")
 
 
 async def _notify_assignee(session, task, creator_name: str | None = None):

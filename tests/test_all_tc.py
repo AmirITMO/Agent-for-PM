@@ -692,6 +692,59 @@ class TestWebAuth:
 # Description in task card — TC-баг 3
 # ═══════════════════════════════════════
 
+class TestUpdateNotification:
+    """Bug 7: уведомление при обновлении задачи."""
+
+    def test_notify_function_exists_bot(self):
+        assert hasattr(bot, "_notify_task_updated_bot")
+
+    def test_notify_function_exists_web(self):
+        from agent3_pm.web import _notify_task_updated
+        assert callable(_notify_task_updated)
+
+    def test_web_update_calls_notify(self):
+        src = open("agent3_pm/web.py", encoding="utf-8").read()
+        assert "_notify_task_updated" in src
+        assert "updater_name" in src
+
+    def test_bot_update_calls_notify(self):
+        src = open("agent3_pm/bot.py", encoding="utf-8").read()
+        assert "_notify_task_updated_bot" in src
+        assert "old_assignee_id" in src
+
+    @pytest.mark.asyncio
+    async def test_update_preserves_task(self, session, users, tasks):
+        """Update task and verify it's still correct."""
+        await repo.update_task(session, tasks["t1"].id, priority=1)
+        t = await repo.get_task_by_id(session, tasks["t1"].id)
+        assert t.priority == 1
+        assert t.assignee_id == users["roma"].id
+
+
+class TestFileDisplay:
+    """Bug 6: file display logic in template."""
+
+    def test_pdf_opens_in_browser(self):
+        src = open("agent3_pm/templates/task_detail.html", encoding="utf-8").read()
+        assert "target=\"_blank\"" in src
+        assert ".pdf" in src
+
+    def test_other_files_download(self):
+        src = open("agent3_pm/templates/task_detail.html", encoding="utf-8").read()
+        assert "download=" in src
+
+    def test_ctrl_v_paste(self):
+        src = open("agent3_pm/templates/task_detail.html", encoding="utf-8").read()
+        assert "paste" in src
+        assert "clipboardData" in src
+        assert "pastedFiles" in src
+
+    def test_image_inline(self):
+        src = open("agent3_pm/templates/task_detail.html", encoding="utf-8").read()
+        assert "is_image" in src
+        assert "<img" in src
+
+
 class TestDescription:
     @pytest.mark.asyncio
     async def test_description_stored(self, session, tasks):

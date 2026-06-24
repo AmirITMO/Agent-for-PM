@@ -1040,6 +1040,36 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _process_smart(update, context, text, session, user)
 
 
+async def _notify_task_updated_bot(session, task, updater, old_assignee_id: int | None):
+    """Notify assignee when task is updated via bot by someone else."""
+    try:
+        from telegram import Bot
+        if not config.TELEGRAM_BOT_TOKEN:
+            return
+        bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        notified = set()
+        updater_id = updater.id if updater else None
+        updater_name = updater.name if updater else "Кто-то"
+
+        if task.assignee and task.assignee.telegram_id and task.assignee_id != updater_id:
+            text = (f"Твоя задача обновлена пользователем {updater_name}\n\n"
+                    f"<b>{task.title}</b>\n{_link_task(task.id, user_id=task.assignee.id)}")
+            await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=text,
+                                        parse_mode="HTML", disable_web_page_preview=True)
+            notified.add(task.assignee_id)
+
+        if old_assignee_id and old_assignee_id != task.assignee_id and old_assignee_id not in notified:
+            from agent3_pm.repository import get_user_by_id
+            old_user = await get_user_by_id(session, old_assignee_id)
+            if old_user and old_user.telegram_id and old_user.id != updater_id:
+                text = (f"Задача переназначена пользователем {updater_name}\n\n"
+                        f"<b>{task.title}</b>\n{_link_task(task.id, user_id=old_user.id)}")
+                await bot_inst.send_message(chat_id=old_user.telegram_id, text=text,
+                                            parse_mode="HTML", disable_web_page_preview=True)
+    except Exception:
+        logger.exception("notify task update failed")
+
+
 async def _send_typing(update):
     """Send 'typing...' indicator."""
     try:
@@ -1218,8 +1248,14 @@ async def _process_smart(update, context, text, session, user):
             await _reply(update, "Задача не найдена.")
             return
 
+        old_assignee_id = task.assignee_id
         await update_task(session, task.id, **changes)
         await _reply(update, f"Обновлено: <b>{task.title}</b>\n{_link_task(task.id, user_id=user.id)}")
+
+        # Уведомить ответственного (если не он сам обновил)
+        task = await get_task_by_id(session, task.id)
+        if task:
+            await _notify_task_updated_bot(session, task, user, old_assignee_id)
 
     elif action == "delete_tasks":
         from agent3_pm.repository import get_task_by_id, delete_task as del_task
