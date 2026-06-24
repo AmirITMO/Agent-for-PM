@@ -149,7 +149,7 @@ async def enter(user_id: int, request: Request, tok: str | None = None,
     user = await repo.get_user_by_id(session, user_id)
     if not user:
         raise HTTPException(404, "Пользователь не найден")
-    redirect_to = next if next and next.startswith("/") else "/board"
+    redirect_to = next if next and next.startswith("/") and not next.startswith("//") else "/board"
     # If user has no password, redirect to set-password page
     if not user.password_hash:
         redirect_to = "/set-password"
@@ -410,6 +410,8 @@ def _abs_url(request: Request, path: str) -> str:
 @app.post("/api/tasks", response_class=RedirectResponse)
 async def create_task_api(request: Request, session: AsyncSession = Depends(get_session)):
     current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     title = form.get("title", "").strip()
     description = form.get("description", "").strip() or None
@@ -421,6 +423,8 @@ async def create_task_api(request: Request, session: AsyncSession = Depends(get_
     hours_raw = form.get("estimated_hours", "")
     due_raw = form.get("due_date", "")
     redirect = form.get("redirect", "/board")
+    if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
+        redirect = "/board"
 
     proj_id = int(proj_raw) if proj_raw and proj_raw.strip() else None
     assign_id = int(assign_raw) if assign_raw and assign_raw.strip() else None
@@ -443,6 +447,9 @@ async def create_task_api(request: Request, session: AsyncSession = Depends(get_
 @app.post("/api/tasks/{task_id}", response_class=RedirectResponse)
 async def update_task_api(task_id: int, request: Request,
                           session: AsyncSession = Depends(get_session)):
+    current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     title = form.get("title", "").strip()
     description = form.get("description", "").strip() or None
@@ -454,6 +461,8 @@ async def update_task_api(task_id: int, request: Request,
     hours_raw = form.get("estimated_hours", "")
     due_raw = form.get("due_date", "")
     redirect = form.get("redirect", "/board")
+    if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
+        redirect = "/board"
 
     fields = {
         "title": title, "description": description,
@@ -472,9 +481,8 @@ async def update_task_api(task_id: int, request: Request,
     await repo.update_task(session, task_id, **fields)
 
     # Уведомить ответственного об обновлении (если обновил не он сам)
-    current = await _current_user(request, session)
-    updater_id = current.id if current else None
-    updater_name = current.name if current else "Кто-то"
+    updater_id = current.id
+    updater_name = current.name
     task_after = await repo.get_task_by_id(session, task_id)
     if task_after:
         await _notify_task_updated(session, task_after, updater_id, updater_name, old_assignee_id)
@@ -485,9 +493,14 @@ async def update_task_api(task_id: int, request: Request,
 @app.post("/api/tasks/{task_id}/status", response_class=RedirectResponse)
 async def update_task_status_api(task_id: int, request: Request,
                                  session: AsyncSession = Depends(get_session)):
+    current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     status = form.get("status")
     redirect = form.get("redirect", "/board")
+    if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
+        redirect = "/board"
     await repo.update_task_status(session, task_id, TaskStatus(status))
     return RedirectResponse(redirect, status_code=303)
 
@@ -495,8 +508,13 @@ async def update_task_status_api(task_id: int, request: Request,
 @app.post("/api/tasks/{task_id}/done", response_class=RedirectResponse)
 async def mark_done_api(task_id: int, request: Request,
                         session: AsyncSession = Depends(get_session)):
+    current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     redirect = form.get("redirect", "/board")
+    if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
+        redirect = "/board"
     task = await repo.update_task_status(session, task_id, TaskStatus.DONE)
     if task:
         await _notify_managers_done(session, task)
@@ -506,9 +524,12 @@ async def mark_done_api(task_id: int, request: Request,
 @app.post("/api/tasks/{task_id}/delete", response_class=RedirectResponse)
 async def delete_task_api(task_id: int, request: Request,
                           session: AsyncSession = Depends(get_session)):
+    current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     redirect = form.get("redirect", "/board")
-    if not redirect or redirect.startswith("http"):
+    if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
         redirect = "/board"
     try:
         await repo.delete_task(session, task_id)
@@ -524,6 +545,8 @@ async def delete_task_api(task_id: int, request: Request,
 async def add_comment_api(task_id: int, request: Request,
                           session: AsyncSession = Depends(get_session)):
     current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     text = (form.get("text") or "").strip() or None
     files = form.getlist("files")
@@ -632,6 +655,8 @@ async def _notify_assignee(session, task, creator_name: str | None = None):
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, session: AsyncSession = Depends(get_session)):
     current = await _current_user(request, session)
+    if not _can_manage(current):
+        return RedirectResponse("/board", status_code=303)
     from agent3_pm.models import Settings
     settings = await repo.get_all_settings(session)
     projects = await repo.get_all_projects(session)
@@ -645,6 +670,9 @@ async def settings_page(request: Request, session: AsyncSession = Depends(get_se
 
 @app.post("/api/settings", response_class=RedirectResponse)
 async def update_settings_api(request: Request, session: AsyncSession = Depends(get_session)):
+    current = await _current_user(request, session)
+    if not _can_manage(current):
+        return RedirectResponse("/board", status_code=303)
     form = await request.form()
     from agent3_pm.models import Settings
     for key in Settings.LABELS:

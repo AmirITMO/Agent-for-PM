@@ -162,7 +162,9 @@ def format_morning_summary(summary: dict, web_url: str = "") -> str:
 
 def format_deadline_warning(task: Task) -> str:
     days_left = (task.due_date - datetime.date.today()).days if task.due_date else None
-    if days_left is not None and days_left < 0:
+    if days_left is None:
+        urgency = "Дедлайн не установлен"
+    elif days_left < 0:
         urgency = f"Просрочено на {abs(days_left)} дн."
     elif days_left == 0:
         urgency = "Дедлайн СЕГОДНЯ"

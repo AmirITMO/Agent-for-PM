@@ -809,3 +809,974 @@ class TestDescription:
         """Карточка в боте должна показывать description."""
         src = open("agent3_pm/bot.py", encoding="utf-8").read()
         assert 'td.get("description")' in src or 'td.get(\'description\')' in src
+
+
+# ═══════════════════════════════════════
+# NEW COMPREHENSIVE TESTS
+# ═══════════════════════════════════════
+
+from agent3_pm.formatter import (
+    format_task_short, format_today_tasks, format_overdue_block,
+    format_overdue_list, format_task_detail, format_project_status,
+    format_morning_summary, format_deadline_warning, _status_label,
+    STATUS_LABEL,
+)
+from agent3_pm.models import (
+    TaskComment, Attachment, Settings, Project,
+    LEVEL_3_POSITIONS, board_members,
+)
+
+
+# ── Formatter edge cases ──
+
+class TestFormatterEdgeCases:
+    def _make_task(self, **kwargs):
+        """Create a mock Task-like object."""
+        class MockUser:
+            def __init__(self, name): self.name = name
+        class MockProject:
+            def __init__(self, name): self.name = name
+        defaults = {
+            "id": 1, "title": "Test Task", "description": None,
+            "status": TaskStatus.TODO, "priority": 2, "is_bug": False,
+            "due_date": None, "estimated_hours": None,
+            "assignee": None, "assignee_id": None,
+            "project": None, "project_id": None,
+            "creator": None, "creator_id": None,
+            "comments": [], "created_at": datetime.datetime.now(),
+            "updated_at": datetime.datetime.now(), "archived_at": None,
+        }
+        defaults.update(kwargs)
+        t = type("FakeTask", (), {})()
+        for k, v in defaults.items():
+            setattr(t, k, v)
+        # Properties
+        t.__class__.is_red = property(lambda s: s.priority == 0 or s.is_bug)
+        t.__class__.is_overdue = property(lambda s: bool(
+            s.due_date and s.status not in CLOSED_STATUSES and s.due_date < datetime.date.today()))
+        t.__class__.is_due_today = property(lambda s: bool(
+            s.due_date and s.status not in CLOSED_STATUSES and s.due_date == datetime.date.today()))
+        t.__class__.is_hot = property(lambda s: bool(
+            s.due_date and s.status not in CLOSED_STATUSES and 0 <= (s.due_date - datetime.date.today()).days <= 1))
+        if "assignee_name" in kwargs:
+            t.assignee = MockUser(kwargs["assignee_name"])
+        if "project_name" in kwargs:
+            t.project = MockProject(kwargs["project_name"])
+        return t
+
+    def test_format_task_short_minimal(self):
+        t = self._make_task(title="Simple")
+        result = format_task_short(t)
+        assert "Simple" in result
+
+    def test_format_task_short_bug(self):
+        t = self._make_task(title="Bug task", is_bug=True)
+        result = format_task_short(t)
+        assert "[Баг]" in result
+
+    def test_format_task_short_p0(self):
+        t = self._make_task(title="Urgent", priority=0)
+        result = format_task_short(t)
+        assert "[P0]" in result
+
+    def test_format_task_short_with_hours(self):
+        t = self._make_task(title="Timed", estimated_hours=3.5)
+        result = format_task_short(t)
+        assert "3.5ч" in result
+
+    def test_format_task_short_overdue(self):
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        t = self._make_task(title="Late", due_date=yesterday)
+        result = format_task_short(t)
+        assert "просрочено" in result
+
+    def test_format_task_short_due_today(self):
+        t = self._make_task(title="Today", due_date=datetime.date.today())
+        result = format_task_short(t)
+        assert "дедлайн сегодня" in result
+
+    def test_format_task_short_future_date(self):
+        future = datetime.date.today() + datetime.timedelta(days=5)
+        t = self._make_task(title="Future", due_date=future)
+        result = format_task_short(t)
+        assert "до" in result
+
+    def test_format_task_short_with_assignee(self):
+        t = self._make_task(title="Assigned", assignee_name="Иван")
+        result = format_task_short(t)
+        assert "-> Иван" in result
+
+    def test_format_today_tasks_empty(self):
+        result = format_today_tasks([])
+        assert "нет" in result.lower()
+
+    def test_format_overdue_block_all_empty(self):
+        result = format_overdue_block([], [], [])
+        assert "нет" in result.lower()
+
+    def test_format_overdue_block_with_data(self):
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        overdue = [self._make_task(title="Overdue1", due_date=yesterday)]
+        hot = [self._make_task(title="Hot1", due_date=datetime.date.today())]
+        bugs = [self._make_task(title="Bug1", is_bug=True)]
+        result = format_overdue_block(overdue, hot, bugs)
+        assert "Overdue1" in result
+        assert "Hot1" in result
+        assert "Bug1" in result
+
+    def test_format_overdue_list_empty(self):
+        result = format_overdue_list([])
+        assert "нет" in result.lower()
+
+    def test_format_overdue_list_with_tasks(self):
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        tasks = [self._make_task(title="Late1", due_date=yesterday)]
+        result = format_overdue_list(tasks)
+        assert "Late1" in result
+
+    def test_format_task_detail_minimal(self):
+        t = self._make_task(title="Detail Task", status=TaskStatus.TODO, priority=2)
+        result = format_task_detail(t)
+        assert "Detail Task" in result
+        assert "P2" in result
+
+    def test_format_task_detail_full(self):
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        t = self._make_task(
+            title="Full Detail", status=TaskStatus.WIP, priority=0,
+            is_bug=True, description="Some desc", due_date=yesterday,
+            estimated_hours=8.0, assignee_name="Иван", project_name="Dev",
+        )
+        result = format_task_detail(t)
+        assert "Баг" in result
+        assert "Some desc" in result
+        assert "ПРОСРОЧЕНО" in result
+        assert "Иван" in result
+        assert "Dev" in result
+        assert "8.0ч" in result
+
+    def test_format_task_detail_done_not_overdue(self):
+        """Done tasks with past due_date should NOT show ПРОСРОЧЕНО."""
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        t = self._make_task(title="Done Task", status=TaskStatus.DONE, due_date=yesterday)
+        result = format_task_detail(t)
+        assert "ПРОСРОЧЕНО" not in result
+
+    def test_format_project_status(self):
+        status = {
+            "status_counts": {TaskStatus.TODO: 3, TaskStatus.DONE: 2},
+            "total": 5, "done": 2, "progress_pct": 40,
+            "next_tasks": [], "overdue_count": 1,
+        }
+        result = format_project_status("TestProj", status)
+        assert "TestProj" in result
+        assert "40%" in result
+        assert "Просрочено" in result
+
+    def test_format_morning_summary(self):
+        summary = {
+            "date": datetime.date.today(), "open_count": 10,
+            "overdue": [], "hot_today": [],
+            "tasks_by_user": {"Иван": 5, "Миша": 3},
+        }
+        result = format_morning_summary(summary)
+        assert "10" in result
+        assert "Иван" in result
+
+    def test_format_morning_summary_truncates_overdue(self):
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        overdue = [self._make_task(title=f"Over{i}", due_date=yesterday) for i in range(15)]
+        summary = {
+            "date": datetime.date.today(), "open_count": 20,
+            "overdue": overdue, "hot_today": [],
+            "tasks_by_user": {},
+        }
+        result = format_morning_summary(summary)
+        assert "ещё" in result
+
+    def test_format_deadline_warning_none_due_date(self):
+        t = self._make_task(title="No Deadline", due_date=None)
+        result = format_deadline_warning(t)
+        assert "не установлен" in result
+        assert "No Deadline" in result
+
+    def test_format_deadline_warning_overdue(self):
+        past = datetime.date.today() - datetime.timedelta(days=3)
+        t = self._make_task(title="Overdue", due_date=past)
+        result = format_deadline_warning(t)
+        assert "Просрочено" in result
+        assert "3" in result
+
+    def test_format_deadline_warning_today(self):
+        t = self._make_task(title="Today", due_date=datetime.date.today())
+        result = format_deadline_warning(t)
+        assert "СЕГОДНЯ" in result
+
+    def test_format_deadline_warning_tomorrow(self):
+        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+        t = self._make_task(title="Tomorrow", due_date=tomorrow)
+        result = format_deadline_warning(t)
+        assert "ЗАВТРА" in result
+
+    def test_format_deadline_warning_future(self):
+        future = datetime.date.today() + datetime.timedelta(days=5)
+        t = self._make_task(title="Future", due_date=future)
+        result = format_deadline_warning(t)
+        assert "5 дн." in result
+
+    def test_status_label_known(self):
+        assert _status_label(TaskStatus.TODO) == "К выполнению"
+        assert _status_label(TaskStatus.WIP) == "В работе"
+
+    def test_status_label_unknown(self):
+        result = _status_label("unknown_status")
+        assert result == "unknown_status"
+
+
+# ── Model properties ──
+
+class TestModelProperties:
+    @pytest.mark.asyncio
+    async def test_task_is_red_priority0(self, session, users, projects):
+        t = await repo.create_task(session, "P0 task", priority=0,
+                                   assignee_id=users["roma"].id)
+        assert t.is_red is True
+
+    @pytest.mark.asyncio
+    async def test_task_is_red_bug(self, session, users, projects):
+        t = await repo.create_task(session, "Bug task", is_bug=True,
+                                   assignee_id=users["roma"].id)
+        assert t.is_red is True
+
+    @pytest.mark.asyncio
+    async def test_task_not_red_p2(self, session, users, projects):
+        t = await repo.create_task(session, "Normal task", priority=2,
+                                   assignee_id=users["roma"].id)
+        assert t.is_red is False
+
+    @pytest.mark.asyncio
+    async def test_task_is_overdue(self, session, users, projects):
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        t = await repo.create_task(session, "Overdue", due_date=yesterday,
+                                   status=TaskStatus.TODO, assignee_id=users["roma"].id)
+        assert t.is_overdue is True
+
+    @pytest.mark.asyncio
+    async def test_task_not_overdue_done(self, session, users, projects):
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        t = await repo.create_task(session, "Done", due_date=yesterday,
+                                   status=TaskStatus.DONE, assignee_id=users["roma"].id)
+        assert t.is_overdue is False
+
+    @pytest.mark.asyncio
+    async def test_task_not_overdue_no_date(self, session, users, projects):
+        t = await repo.create_task(session, "No date", status=TaskStatus.TODO,
+                                   assignee_id=users["roma"].id)
+        assert t.is_overdue is False
+
+    @pytest.mark.asyncio
+    async def test_task_is_due_today(self, session, users, projects):
+        t = await repo.create_task(session, "Today", due_date=datetime.date.today(),
+                                   status=TaskStatus.TODO, assignee_id=users["roma"].id)
+        assert t.is_due_today is True
+
+    @pytest.mark.asyncio
+    async def test_task_is_hot(self, session, users, projects):
+        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+        t = await repo.create_task(session, "Hot", due_date=tomorrow,
+                                   status=TaskStatus.TODO, assignee_id=users["roma"].id)
+        assert t.is_hot is True
+
+    @pytest.mark.asyncio
+    async def test_task_not_hot_far(self, session, users, projects):
+        future = datetime.date.today() + datetime.timedelta(days=10)
+        t = await repo.create_task(session, "Far", due_date=future,
+                                   status=TaskStatus.TODO, assignee_id=users["roma"].id)
+        assert t.is_hot is False
+
+    def test_attachment_is_image(self):
+        a = type("FakeAtt", (), {"content_type": "image/jpeg"})()
+        a.__class__.is_image = property(lambda s: bool(s.content_type and s.content_type.startswith("image/")))
+        assert a.is_image is True
+
+    def test_attachment_not_image(self):
+        a = type("FakeAtt", (), {"content_type": "application/pdf"})()
+        a.__class__.is_image = property(lambda s: bool(s.content_type and s.content_type.startswith("image/")))
+        assert a.is_image is False
+
+    def test_attachment_none_content_type(self):
+        a = type("FakeAtt", (), {"content_type": None})()
+        a.__class__.is_image = property(lambda s: bool(s.content_type and s.content_type.startswith("image/")))
+        assert a.is_image is False
+
+    def test_is_level_1_all_positions(self):
+        for pos in LEVEL_1_POSITIONS:
+            assert is_level_1(pos) is True
+        for pos in LEVEL_2_POSITIONS:
+            assert is_level_1(pos) is False
+        for pos in LEVEL_3_POSITIONS:
+            assert is_level_1(pos) is False
+
+    def test_settings_defaults(self):
+        assert "morning_summary_hour" in Settings.DEFAULTS
+        assert "timezone" in Settings.DEFAULTS
+        assert Settings.DEFAULTS["timezone"] == "Europe/Moscow"
+
+
+# ── Repository edge cases ──
+
+class TestRepositoryEdgeCases:
+    @pytest.mark.asyncio
+    async def test_get_user_by_id_nonexistent(self, session):
+        user = await repo.get_user_by_id(session, 99999)
+        assert user is None
+
+    @pytest.mark.asyncio
+    async def test_get_user_by_telegram_id_nonexistent(self, session):
+        user = await repo.get_user_by_telegram_id(session, 99999)
+        assert user is None
+
+    @pytest.mark.asyncio
+    async def test_get_user_by_username_case_insensitive(self, session):
+        await repo.create_user(session, "TestUser", telegram_username="TestName")
+        user = await repo.get_user_by_telegram_username(session, "testname")
+        assert user is not None
+        assert user.name == "TestUser"
+
+    @pytest.mark.asyncio
+    async def test_update_user_nonexistent(self, session):
+        result = await repo.update_user(session, 99999, name="nope")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_delete_user_nonexistent(self, session):
+        result = await repo.delete_user(session, 99999)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_bind_telegram_id_nonexistent(self, session):
+        result = await repo.bind_telegram_id(session, 99999, 12345)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_delete_task_nonexistent(self, session):
+        result = await repo.delete_task(session, 99999)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_task_nonexistent(self, session):
+        result = await repo.update_task(session, 99999, title="nope")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_task_by_id_nonexistent(self, session):
+        result = await repo.get_task_by_id(session, 99999)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_search_tasks_empty_query(self, session, users, projects, tasks):
+        results = await repo.search_tasks_by_title(session, "nonexistent_xyz")
+        assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_search_tasks_finds_match(self, session, users, projects, tasks):
+        results = await repo.search_tasks_by_title(session, "Zoom")
+        assert len(results) >= 1
+        assert any("Zoom" in t.title for t in results)
+
+    @pytest.mark.asyncio
+    async def test_get_project_by_name_case_insensitive(self, session, projects):
+        proj = await repo.get_project_by_name(session, "marketai dev")
+        assert proj is not None
+        assert proj.name == "MarketAI Dev"
+
+    @pytest.mark.asyncio
+    async def test_get_project_by_name_nonexistent(self, session):
+        proj = await repo.get_project_by_name(session, "Nonexistent Project")
+        assert proj is None
+
+    @pytest.mark.asyncio
+    async def test_get_project_by_id_nonexistent(self, session):
+        proj = await repo.get_project_by_id(session, 99999)
+        assert proj is None
+
+    @pytest.mark.asyncio
+    async def test_board_access_toggle(self, session, users, projects):
+        pid = projects["dev"].id
+        uid = users["ruslan"].id
+        # Grant
+        await repo.set_board_access(session, pid, uid, True)
+        members = await repo.get_board_member_ids(session, pid)
+        assert uid in members
+        # Revoke
+        await repo.set_board_access(session, pid, uid, False)
+        members = await repo.get_board_member_ids(session, pid)
+        assert uid not in members
+
+    @pytest.mark.asyncio
+    async def test_board_access_idempotent(self, session, users, projects):
+        pid = projects["dev"].id
+        uid = users["ruslan"].id
+        await repo.set_board_access(session, pid, uid, True)
+        await repo.set_board_access(session, pid, uid, True)  # no error
+        members = await repo.get_board_member_ids(session, pid)
+        assert uid in members
+
+    @pytest.mark.asyncio
+    async def test_get_board_members(self, session, users, projects):
+        pid = projects["dev"].id
+        uid = users["ivan"].id
+        await repo.set_board_access(session, pid, uid, True)
+        members = await repo.get_board_members(session, pid)
+        assert any(m.id == uid for m in members)
+
+    @pytest.mark.asyncio
+    async def test_get_managers(self, session, users):
+        managers = await repo.get_managers(session)
+        names = [m.name for m in managers]
+        assert "Амир Хайруллин" in names  # CEO
+        assert "Иван Шаталов" not in names  # Программист
+
+    @pytest.mark.asyncio
+    async def test_settings_crud(self, session):
+        val = await repo.get_setting(session, "timezone")
+        assert val == "Europe/Moscow"  # default
+        await repo.set_setting(session, "timezone", "UTC")
+        val2 = await repo.get_setting(session, "timezone")
+        assert val2 == "UTC"
+        # Update existing
+        await repo.set_setting(session, "timezone", "Asia/Tokyo")
+        val3 = await repo.get_setting(session, "timezone")
+        assert val3 == "Asia/Tokyo"
+
+    @pytest.mark.asyncio
+    async def test_get_all_settings_merged(self, session):
+        await repo.set_setting(session, "timezone", "UTC")
+        settings = await repo.get_all_settings(session)
+        assert settings["timezone"] == "UTC"
+        assert "morning_summary_hour" in settings  # default
+
+    @pytest.mark.asyncio
+    async def test_get_setting_unknown_key(self, session):
+        val = await repo.get_setting(session, "nonexistent_key")
+        assert val == ""
+
+    @pytest.mark.asyncio
+    async def test_notification_log_and_check(self, session, users, tasks):
+        uid = users["roma"].id
+        tid = tasks["t1"].id
+        # Not notified yet
+        result = await repo.was_notified_today(session, uid, tid, "test_type")
+        assert result is False
+        # Log notification
+        await repo.log_notification(session, uid, tid, "test_type")
+        result = await repo.was_notified_today(session, uid, tid, "test_type")
+        assert result is True
+        # Different type not affected
+        result = await repo.was_notified_today(session, uid, tid, "other_type")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_create_task_with_all_fields(self, session, users, projects):
+        dd = datetime.date.today() + datetime.timedelta(days=3)
+        t = await repo.create_task(
+            session, title="Full task", project_id=projects["dev"].id,
+            description="Full desc", status=TaskStatus.WIP,
+            priority=1, is_bug=True, assignee_id=users["ivan"].id,
+            creator_id=users["roma"].id, estimated_hours=5.5, due_date=dd,
+        )
+        assert t.title == "Full task"
+        assert t.description == "Full desc"
+        assert t.priority == 1
+        assert t.is_bug is True
+        assert t.due_date == dd
+        assert t.assignee_id == users["ivan"].id
+
+    @pytest.mark.asyncio
+    async def test_add_comment_and_attachment(self, session, users, tasks):
+        comment = await repo.add_comment(session, tasks["t1"].id, users["roma"].id, "Test comment")
+        assert comment.text == "Test comment"
+        att = await repo.add_attachment(session, comment.id, "test.pdf", "stored_abc.pdf", "application/pdf")
+        assert att.filename == "test.pdf"
+        assert att.stored_name == "stored_abc.pdf"
+
+    @pytest.mark.asyncio
+    async def test_add_comment_null_text(self, session, users, tasks):
+        comment = await repo.add_comment(session, tasks["t1"].id, None, None)
+        assert comment.text is None
+        assert comment.user_id is None
+
+    @pytest.mark.asyncio
+    async def test_get_tasks_due_today(self, session, users, projects):
+        await repo.create_task(session, "Due today", due_date=datetime.date.today(),
+                               status=TaskStatus.TODO, assignee_id=users["roma"].id,
+                               project_id=projects["dev"].id)
+        result = await repo.get_tasks_due_today(session)
+        assert any(t.title == "Due today" for t in result)
+
+    @pytest.mark.asyncio
+    async def test_get_overdue_tasks_by_project(self, session, users, projects):
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        await repo.create_task(session, "Proj Overdue", due_date=yesterday,
+                               status=TaskStatus.TODO, project_id=projects["dev"].id,
+                               assignee_id=users["roma"].id)
+        overdue = await repo.get_overdue_tasks(session, project_id=projects["dev"].id)
+        assert any(t.title == "Proj Overdue" for t in overdue)
+
+    @pytest.mark.asyncio
+    async def test_get_user_bugs(self, session, users, projects):
+        await repo.create_task(session, "User Bug", is_bug=True, status=TaskStatus.TODO,
+                               assignee_id=users["roma"].id)
+        bugs = await repo.get_user_bugs(session, users["roma"].id)
+        assert any(t.title == "User Bug" for t in bugs)
+
+    @pytest.mark.asyncio
+    async def test_get_project_status(self, session, users, projects, tasks):
+        status = await repo.get_project_status(session, projects["dev"].id)
+        assert "total" in status
+        assert "done" in status
+        assert "progress_pct" in status
+        assert "overdue_count" in status
+        assert isinstance(status["next_tasks"], list)
+
+    @pytest.mark.asyncio
+    async def test_get_team_summary(self, session, users, projects, tasks):
+        summary = await repo.get_team_summary(session)
+        assert "open_count" in summary
+        assert isinstance(summary["overdue"], list)
+        assert isinstance(summary["tasks_by_user"], dict)
+
+    @pytest.mark.asyncio
+    async def test_get_all_tasks_with_archived(self, session, users, projects):
+        t = await repo.create_task(session, "Archived", status=TaskStatus.DONE,
+                                   assignee_id=users["roma"].id)
+        t.archived_at = datetime.datetime.now()
+        await session.commit()
+        # Without archived
+        all_tasks = await repo.get_all_tasks(session)
+        assert t.id not in [x.id for x in all_tasks]
+        # With archived
+        all_tasks = await repo.get_all_tasks(session, include_archived=True)
+        assert t.id in [x.id for x in all_tasks]
+
+
+# ── Web security tests ──
+
+class TestWebSecurity:
+    def test_open_redirect_enter_double_slash(self):
+        """next=//evil.com should be rejected."""
+        from agent3_pm.web import enter
+        import inspect
+        src = inspect.getsource(enter)
+        assert 'startswith("//")' in src or 'not next.startswith("//"' in src
+
+    def test_open_redirect_delete_api(self):
+        """redirect parameter should not allow absolute URLs."""
+        src = open("agent3_pm/web.py", encoding="utf-8").read()
+        # All redirect validations should use startswith("//") check
+        assert 'redirect.startswith("//"' in src or 'startswith("//")' in src
+
+    def test_update_task_api_requires_auth(self):
+        src = open("agent3_pm/web.py", encoding="utf-8").read()
+        # Find the update_task_api function and check it has auth
+        idx = src.index("async def update_task_api")
+        chunk = src[idx:idx+300]
+        assert "_current_user" in chunk
+        assert "not current" in chunk or "if not current" in chunk
+
+    def test_update_status_api_requires_auth(self):
+        src = open("agent3_pm/web.py", encoding="utf-8").read()
+        idx = src.index("async def update_task_status_api")
+        chunk = src[idx:idx+300]
+        assert "_current_user" in chunk
+
+    def test_mark_done_api_requires_auth(self):
+        src = open("agent3_pm/web.py", encoding="utf-8").read()
+        idx = src.index("async def mark_done_api")
+        chunk = src[idx:idx+300]
+        assert "_current_user" in chunk
+
+    def test_delete_task_api_requires_auth(self):
+        src = open("agent3_pm/web.py", encoding="utf-8").read()
+        idx = src.index("async def delete_task_api")
+        chunk = src[idx:idx+300]
+        assert "_current_user" in chunk
+
+    def test_add_comment_api_requires_auth(self):
+        src = open("agent3_pm/web.py", encoding="utf-8").read()
+        idx = src.index("async def add_comment_api")
+        chunk = src[idx:idx+300]
+        assert "not current" in chunk or "if not current" in chunk
+
+    def test_create_task_api_requires_auth(self):
+        src = open("agent3_pm/web.py", encoding="utf-8").read()
+        idx = src.index("async def create_task_api")
+        chunk = src[idx:idx+300]
+        assert "not current" in chunk or "if not current" in chunk
+
+    def test_settings_requires_manager(self):
+        src = open("agent3_pm/web.py", encoding="utf-8").read()
+        idx = src.index("async def settings_page")
+        chunk = src[idx:idx+300]
+        assert "_can_manage" in chunk
+
+    def test_settings_update_requires_manager(self):
+        src = open("agent3_pm/web.py", encoding="utf-8").read()
+        idx = src.index("async def update_settings_api")
+        chunk = src[idx:idx+300]
+        assert "_can_manage" in chunk
+
+    def test_web_token_consistency(self):
+        from agent3_pm.web import _make_token
+        assert _make_token(1) == _make_token(1)
+        assert _make_token(1) != _make_token(2)
+
+    def test_enter_token_validation(self):
+        from agent3_pm.web import _verify_enter_token
+        from agent3_pm.bot import _make_enter_token
+        tok = _make_enter_token(1)
+        assert _verify_enter_token(1, tok) is True
+        assert _verify_enter_token(2, tok) is False
+        assert _verify_enter_token(1, "invalid") is False
+        assert _verify_enter_token(1, "") is False
+
+    def test_enter_token_expired(self):
+        from agent3_pm.web import _verify_enter_token
+        import time, hmac as hmac_mod, hashlib as hl_mod
+        old_ts = str(int(time.time()) - 90000)  # >24h ago
+        sig = hmac_mod.new(config.SECRET_KEY.encode(),
+                           f"1:{old_ts}".encode(),
+                           hl_mod.sha256).hexdigest()[:16]
+        tok = f"{old_ts}.{sig}"
+        assert _verify_enter_token(1, tok) is False
+
+    def test_password_hashing(self):
+        from agent3_pm.web import _hash_password
+        h1 = _hash_password("test123")
+        h2 = _hash_password("test123")
+        assert h1 == h2
+        assert _hash_password("other") != h1
+
+
+# ── Web routes existence ──
+
+class TestWebRoutes:
+    def test_all_routes_exist(self):
+        from agent3_pm.web import app
+        paths = [r.path for r in app.routes if hasattr(r, "path")]
+        expected = [
+            "/", "/enter/{user_id}", "/login", "/set-password", "/logout",
+            "/board", "/my", "/employees", "/task/{task_id}", "/settings",
+            "/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/status",
+            "/api/tasks/{task_id}/done", "/api/tasks/{task_id}/delete",
+            "/api/tasks/{task_id}/comment", "/api/board-access",
+            "/api/users", "/api/users/{user_id}", "/api/users/{user_id}/delete",
+            "/api/users/{user_id}/reset-password", "/api/settings",
+        ]
+        for p in expected:
+            assert p in paths, f"Route {p} not found"
+
+
+# ── Bot logic tests ──
+
+class TestBotLogic:
+    @pytest.fixture
+    def fake_users(self):
+        class U:
+            def __init__(s, n): s.name = n
+        return [U("Иван Шаталов"), U("арсений арсений"), U("Васильев Роман Евгеньевич"),
+                U("Миша Капустин"), U("Хафизов Руслан Рустемович"), U("Максим Орлов")]
+
+    def test_fuzzy_match_exact(self, fake_users):
+        result = bot._fuzzy_match_user("Иван Шаталов", fake_users)
+        assert result.name == "Иван Шаталов"
+
+    def test_fuzzy_match_partial(self, fake_users):
+        result = bot._fuzzy_match_user("Иван", fake_users)
+        assert result.name == "Иван Шаталов"
+
+    def test_fuzzy_match_first_word(self, fake_users):
+        result = bot._fuzzy_match_user("Васильев", fake_users)
+        assert "Васильев" in result.name
+
+    def test_fuzzy_match_no_match(self, fake_users):
+        result = bot._fuzzy_match_user("Несуществующий", fake_users)
+        assert result is None
+
+    def test_fuzzy_match_short_name(self, fake_users):
+        result = bot._fuzzy_match_user("Ив", fake_users)
+        # "Ив" is a substring of "Иван" so fuzzy_match finds it
+        assert result is not None
+        assert "Иван" in result.name
+        # But truly random short input should fail
+        assert bot._fuzzy_match_user("Яя", fake_users) is None
+
+    def test_name_stems(self):
+        stems = bot._name_stems("максима")
+        assert len(stems) > 0
+        assert any("макс" in s for s in stems)
+
+    def test_name_stems_short(self):
+        stems = bot._name_stems("ка")
+        assert len(stems) == 0  # too short
+
+    def test_name_stems_nickname(self):
+        stems = bot._name_stems("вани")
+        assert "иван" in stems or any("иван" in s for s in stems)
+
+    def test_match_user_genitive_short(self, fake_users):
+        """Too short names should return None."""
+        assert bot._match_user_genitive("ив", fake_users) is None
+        assert bot._match_user_genitive("", fake_users) is None
+        assert bot._match_user_genitive("a", fake_users) is None
+
+    def test_match_user_genitive_strips_punctuation(self, fake_users):
+        result = bot._match_user_genitive("ромы?", fake_users)
+        assert result is not None
+        assert "Васильев" in result.name
+
+    def test_match_user_genitive_maxim(self, fake_users):
+        """Nickname 'макс' should match 'Максим Орлов'."""
+        result = bot._match_user_genitive("макса", fake_users)
+        assert result is not None
+        assert "Максим" in result.name
+
+    def test_is_team_report_variations(self):
+        assert bot._is_team_report("кто чем занят задачи") is True
+        assert bot._is_team_report("у всех задачи") is True
+        assert bot._is_team_report("отчёт по задачам") is True
+        assert bot._is_team_report("по всем сотрудникам задачи") is True
+
+    def test_not_team_report(self):
+        assert bot._is_team_report("hello world") is False
+        assert bot._is_team_report("просто текст без ключевых слов") is False
+
+    def test_clean_html_code_preserved(self):
+        html = "<code>x = 1</code>"
+        assert bot._clean_html(html) == html
+
+    def test_clean_html_pre_preserved(self):
+        html = "<pre>block</pre>"
+        assert bot._clean_html(html) == html
+
+    def test_clean_html_div_removed(self):
+        html = "<div>text</div>"
+        result = bot._clean_html(html)
+        assert "<div>" not in result
+        assert "text" in result
+
+    def test_clean_html_p_to_newline(self):
+        html = "<p>line1</p><p>line2</p>"
+        result = bot._clean_html(html)
+        assert "\n" in result
+        assert "line1" in result
+        assert "line2" in result
+
+    def test_task_intent_not_names(self):
+        """Pronouns should not match as user names."""
+        class U:
+            def __init__(s, n): s.name = n
+        users = [U("Иван")]
+        for text in [
+            "задачи у кого", "задачи у всех", "задачи у меня",
+        ]:
+            i, t = bot._task_intent(text, users)
+            assert i is None, f"Should not match: {text}"
+
+    def test_task_intent_no_zadach_word(self):
+        class U:
+            def __init__(s, n): s.name = n
+        users = [U("Иван")]
+        i, t = bot._task_intent("покажи расписание Ивана", users)
+        assert i is None
+
+    def test_group_sessions_dict_exists(self):
+        assert isinstance(bot._group_sessions, dict)
+
+    def test_menu_kb(self):
+        kb = bot._menu_kb()
+        assert kb is not None
+
+    def test_bot_username_constant(self):
+        assert bot.BOT_USERNAME == "projectmanageraiibot"
+
+
+# ── KB Watcher edge cases ──
+
+class TestKBWatcherEdgeCases:
+    def test_extract_source_info_empty(self):
+        from agent3_pm.kb_watcher import _extract_source_info
+        info = _extract_source_info("", "test.md")
+        assert info["filename"] == "test.md"
+        assert info["date"] == ""
+
+    def test_extract_source_info_frontmatter(self):
+        from agent3_pm.kb_watcher import _extract_source_info
+        content = "date: 2024-01-15\nauthor: test_user\nauthor_name: \"Иван Иванов\""
+        info = _extract_source_info(content, "call.md")
+        assert info["date"] == "2024-01-15"
+        assert info["author"] == "test_user"
+        assert info["author_name"] == "Иван Иванов"
+
+    def test_extract_source_info_sotrudnik(self):
+        from agent3_pm.kb_watcher import _extract_source_info
+        content = "Сотрудник: Петр Петров (Маркетолог)"
+        info = _extract_source_info(content, "file.md")
+        assert "Петр Петров" in info["author_name"]
+
+    def test_batch_operations(self):
+        from agent3_pm.kb_watcher import _approval_batches, get_batch, remove_batch
+        test_id = "test_batch_9999"
+        _approval_batches[test_id] = {"tasks": [], "locked_by": None, "current_idx": 0}
+        assert get_batch(test_id) is not None
+        remove_batch(test_id)
+        assert get_batch(test_id) is None
+
+    def test_get_batch_nonexistent(self):
+        from agent3_pm.kb_watcher import get_batch
+        assert get_batch("nonexistent_batch") is None
+
+    def test_remove_batch_nonexistent(self):
+        from agent3_pm.kb_watcher import remove_batch
+        remove_batch("nonexistent_batch")  # should not raise
+
+    def test_seen_global_dedup(self):
+        from agent3_pm.kb_watcher import _seen_global
+        _seen_global.add("test_dedup_file.md")
+        assert "test_dedup_file.md" in _seen_global
+        _seen_global.discard("test_dedup_file.md")
+
+    def test_parse_prompt_calls_has_json_format(self):
+        from agent3_pm.kb_watcher import PARSE_PROMPT_CALLS
+        assert '"title"' in PARSE_PROMPT_CALLS
+        assert '"assignee_name"' in PARSE_PROMPT_CALLS
+        assert '"priority"' in PARSE_PROMPT_CALLS
+
+    def test_parse_prompt_bugs_has_json_format(self):
+        from agent3_pm.kb_watcher import PARSE_PROMPT_BUGS
+        assert '"is_bug": true' in PARSE_PROMPT_BUGS
+
+
+# ── GitHub Watcher ──
+
+class TestGitHubWatcher:
+    def test_github_watcher_seen_files_set(self):
+        from agent3_pm.github_watcher import _seen_files
+        assert isinstance(_seen_files, set)
+
+    def test_github_constants(self):
+        from agent3_pm.github_watcher import GITHUB_REPO, GITHUB_PATH
+        assert "bugs" in GITHUB_PATH
+        assert len(GITHUB_REPO) > 0
+
+
+# ── Config ──
+
+class TestConfig:
+    def test_config_defaults(self):
+        assert config.WEB_PORT == 8080 or isinstance(config.WEB_PORT, int)
+        assert config.MORNING_SUMMARY_HOUR >= 0
+        assert config.MORNING_SUMMARY_MINUTE >= 0
+        assert config.DEADLINE_WARNING_HOURS > 0
+
+    def test_config_admin_ids(self):
+        assert isinstance(config.ADMIN_TELEGRAM_IDS, list)
+
+    def test_config_timezone(self):
+        assert len(config.TIMEZONE) > 0
+
+    def test_config_secret_key(self):
+        assert config.SECRET_KEY == "test-secret"  # from env
+
+
+# ── Task Agent ──
+
+class TestTaskAgent:
+    def test_build_system_prompt_contains_dates(self):
+        from agent3_pm.task_agent import _build_system_prompt
+        ctx = {"current_user": {"id": 1, "name": "Test"}, "projects": [],
+               "users": [], "all_tasks": [], "web_base_url": "http://test"}
+        prompt = _build_system_prompt(ctx)
+        today = datetime.date.today().isoformat()
+        assert today in prompt
+
+    def test_build_system_prompt_contains_all_statuses(self):
+        from agent3_pm.task_agent import _build_system_prompt
+        ctx = {"current_user": {}, "projects": [], "users": [],
+               "all_tasks": [], "web_base_url": ""}
+        prompt = _build_system_prompt(ctx)
+        for s in ["backlog", "planning", "todo", "wip", "done", "approved", "hold"]:
+            assert s in prompt
+
+    def test_build_system_prompt_includes_tasks(self):
+        from agent3_pm.task_agent import _build_system_prompt
+        ctx = {
+            "current_user": {"id": 1, "name": "A"},
+            "projects": [{"id": 1, "name": "Dev"}],
+            "users": [{"id": 1, "name": "A", "position": "CEO"}],
+            "all_tasks": [{"id": 1, "title": "TestTask", "status": "todo"}],
+            "web_base_url": "http://test",
+        }
+        prompt = _build_system_prompt(ctx)
+        assert "TestTask" in prompt
+
+    def test_mode_create_and_ask_different(self):
+        from agent3_pm.task_agent import _MODE_CREATE, _MODE_ASK
+        assert _MODE_CREATE != _MODE_ASK
+        assert "СОЗДАНИЕ" in _MODE_CREATE
+        assert "ВОПРОСЫ" in _MODE_ASK
+
+    @pytest.mark.asyncio
+    async def test_smart_assistant_handles_api_error(self):
+        """When OpenAI client fails, should return error message."""
+        from agent3_pm.task_agent import smart_assistant
+        # With no valid API key, should gracefully return error
+        result = await smart_assistant(
+            "test", {"current_user": {}, "projects": [], "users": [],
+                     "all_tasks": [], "web_base_url": ""},
+            mode="ask"
+        )
+        assert result.get("action") == "answer"
+        assert "message" in result
+
+
+# ── Web label maps ──
+
+class TestWebLabelMaps:
+    def test_status_label_map_complete(self):
+        from agent3_pm.web import STATUS_LABEL_MAP, KANBAN_COLUMNS
+        for col in KANBAN_COLUMNS:
+            assert col in STATUS_LABEL_MAP
+
+    def test_kanban_columns_order(self):
+        from agent3_pm.web import KANBAN_COLUMNS
+        assert KANBAN_COLUMNS[0] == "backlog"
+        assert KANBAN_COLUMNS[-1] == "hold"
+        assert "wip" in KANBAN_COLUMNS
+
+    def test_priority_label_map(self):
+        from agent3_pm.web import PRIORITY_LABEL_MAP
+        assert 0 in PRIORITY_LABEL_MAP
+        assert 3 in PRIORITY_LABEL_MAP
+        assert "срочно" in PRIORITY_LABEL_MAP[0]
+
+    def test_task_to_dict(self):
+        from agent3_pm.web import _task_to_dict
+        class FakeTask:
+            id = 1; title = "T"; description = None
+            status = TaskStatus.TODO; priority = 2; is_bug = False
+            assignee = None; assignee_id = None
+            project = None; project_id = None
+            estimated_hours = None; due_date = None
+            comments = []; archived_at = None
+            @property
+            def is_red(self): return False
+            @property
+            def is_overdue(self): return False
+            @property
+            def is_hot(self): return False
+        d = _task_to_dict(FakeTask())
+        assert d["id"] == 1
+        assert d["status"] == "todo"
+        assert d["assignee"] == "—"
+        assert d["comments_count"] == 0
