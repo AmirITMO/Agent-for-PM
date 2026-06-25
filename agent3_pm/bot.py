@@ -1412,6 +1412,11 @@ async def _process_smart(update, context, text, session, user):
 
     action = result.get("action", "answer")
 
+    # Hard guard: GPT sometimes returns create_task in ask mode — block it
+    if mode == "ask" and action == "create_task":
+        await _reply(update, "Чтобы создать задачу, нажми кнопку «Задать задачу».")
+        return
+
     if action == "clarify":
         msg = result.get("message", "Уточни, пожалуйста.")
         # If asking about project — show project buttons
