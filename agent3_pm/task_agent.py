@@ -81,8 +81,10 @@ WEB URL: {context_data.get('web_base_url', '')}
 «Перенеси задачу X на доску Marketing» = изменить project_id через update_task
 «Перенеси задачу X с Dev на Marketing» = то же самое
 
-«Переставь на следующий уровень» — посмотри текущий status и поставь следующий по порядку:
-backlog→planning, planning→todo, todo→wip, wip→done, done→approved
+«Переставь на следующий уровень/этап» → changes: {{"status": "next"}}
+«Верни на предыдущий этап» → changes: {{"status": "prev"}}
+НЕ вычисляй следующий статус сам — система сделает это автоматически.
+Порядок этапов: backlog → planning → todo → wip → done → approved → hold
 
 «Отметь выполненной» = status: "done"
 

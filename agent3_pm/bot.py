@@ -1483,11 +1483,49 @@ async def _process_smart(update, context, text, session, user):
                 return
             task_id = tasks[0].id
 
+        STATUS_ORDER = [
+            TaskStatus.BACKLOG, TaskStatus.PLANNING, TaskStatus.TODO,
+            TaskStatus.WIP, TaskStatus.DONE, TaskStatus.APPROVED, TaskStatus.HOLD,
+        ]
+
         if "status" in changes:
-            try:
-                changes["status"] = TaskStatus(changes["status"])
-            except ValueError:
-                del changes["status"]
+            from agent3_pm.repository import get_task_by_id as _gtbi
+            current_task = await _gtbi(session, task_id)
+            new_status_raw = changes["status"]
+            if new_status_raw in ("next", "следующий"):
+                if current_task and current_task.status in STATUS_ORDER:
+                    idx = STATUS_ORDER.index(current_task.status)
+                    if idx + 1 < len(STATUS_ORDER):
+                        changes["status"] = STATUS_ORDER[idx + 1]
+                    else:
+                        del changes["status"]
+                else:
+                    del changes["status"]
+            elif new_status_raw in ("prev", "previous", "предыдущий"):
+                if current_task and current_task.status in STATUS_ORDER:
+                    idx = STATUS_ORDER.index(current_task.status)
+                    if idx - 1 >= 0:
+                        changes["status"] = STATUS_ORDER[idx - 1]
+                    else:
+                        del changes["status"]
+                else:
+                    del changes["status"]
+            else:
+                try:
+                    new_s = TaskStatus(new_status_raw)
+                    if current_task:
+                        cur_idx = STATUS_ORDER.index(current_task.status) if current_task.status in STATUS_ORDER else -1
+                        new_idx = STATUS_ORDER.index(new_s) if new_s in STATUS_ORDER else -1
+                        if cur_idx >= 0 and new_idx >= 0 and abs(new_idx - cur_idx) > 1:
+                            # GPT skipped stages — force single step in requested direction
+                            step = 1 if new_idx > cur_idx else -1
+                            changes["status"] = STATUS_ORDER[cur_idx + step]
+                        else:
+                            changes["status"] = new_s
+                    else:
+                        changes["status"] = new_s
+                except ValueError:
+                    del changes["status"]
         if "assignee_name" in changes:
             users = await get_all_users(session)
             match = _fuzzy_match_user(changes["assignee_name"], users)
