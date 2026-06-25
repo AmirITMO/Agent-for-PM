@@ -191,8 +191,13 @@ def _task_intent(text: str, users: list):
     return ("delete" if is_delete else "list", target)
 
 
+_ACTION_VERBS = ("удали", "удал", "снеси", "убери", "перенеси", "перестав", "измени", "отметь", "назначь")
+
+
 def _is_team_report(text: str) -> bool:
     low = text.lower()
+    if any(v in low for v in _ACTION_VERBS):
+        return False
     if "задач" not in low and "отчет" not in low and "отчёт" not in low:
         return False
     return any(p in low for p in (
