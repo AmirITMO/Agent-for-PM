@@ -105,12 +105,29 @@ async def bind_telegram_id(session: AsyncSession, user_id: int, telegram_id: int
 
 
 async def delete_user(session: AsyncSession, user_id: int) -> bool:
+    """Soft-delete: deactivate user and archive their tasks."""
     user = await get_user_by_id(session, user_id)
     if not user:
         return False
-    await session.delete(user)
+    user.is_active = False
+    now = datetime.datetime.now()
+    tasks = await get_all_tasks(session, assignee_id=user_id)
+    for t in tasks:
+        if t.status not in CLOSED_STATUSES:
+            t.archived_at = now
     await session.commit()
     return True
+
+
+async def restore_user(session: AsyncSession, user_id: int) -> User | None:
+    """Restore soft-deleted user (unarchive tasks stays manual)."""
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return None
+    user.is_active = True
+    await session.commit()
+    await session.refresh(user)
+    return user
 
 
 # ── Board membership ──

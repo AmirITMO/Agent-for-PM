@@ -997,7 +997,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with AsyncSessionLocal() as session:
         user = await get_user_by_telegram_id(session, update.effective_user.id)
-        if not user:
+        if not user or not user.is_active:
             await update.message.reply_text("Нажми /start для регистрации.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("Зарегистрироваться", callback_data="register")]]))
@@ -1101,7 +1101,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with AsyncSessionLocal() as session:
         user = await get_user_by_telegram_id(session, update.effective_user.id)
-    if not user:
+    if not user or not user.is_active:
         await _reply(update, "Нажми /start для регистрации.")
         return
 

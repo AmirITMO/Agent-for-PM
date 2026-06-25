@@ -389,6 +389,15 @@ async def delete_user_api(user_id: int, request: Request,
     return RedirectResponse("/employees", status_code=303)
 
 
+@app.post("/api/users/{user_id}/restore", response_class=RedirectResponse)
+async def restore_user_api(user_id: int, request: Request,
+                           session: AsyncSession = Depends(get_session)):
+    if not _can_manage(await _current_user(request, session)):
+        raise HTTPException(403, "Недостаточно прав")
+    await repo.restore_user(session, user_id)
+    return RedirectResponse("/employees", status_code=303)
+
+
 @app.post("/api/users/{user_id}/reset-password", response_class=RedirectResponse)
 async def reset_password_api(user_id: int, request: Request,
                              session: AsyncSession = Depends(get_session)):

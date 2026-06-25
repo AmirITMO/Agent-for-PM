@@ -19,9 +19,12 @@
         </thead>
         <tbody>
             {% for u in users %}
-            <tr>
+            <tr{% if not u.is_active %} style="opacity:0.5; background:#fff3f3;"{% endif %}>
                 <td>
-                    <div style="font-weight:600;">{{ u.name }}</div>
+                    <div style="font-weight:600;">
+                        {{ u.name }}
+                        {% if not u.is_active %}<span style="color:#c62828; font-weight:400; font-size:12px;"> (заблокирован)</span>{% endif %}
+                    </div>
                     <div style="font-size:12px; color:#888;">
                         {{ u.position or 'без должности' }}
                         {% if u.telegram_username %} · @{{ u.telegram_username }}{% endif %}
@@ -29,13 +32,21 @@
                     </div>
                 </td>
                 <td style="white-space:nowrap;">
+                    {% if u.is_active %}
                     <a href="javascript:void(0)" onclick="openEditUser({{ u.id }}, '{{ u.name|e }}', '{{ u.position or '' }}', '{{ u.telegram_username or '' }}')" style="color:#555; text-decoration:none; font-size:12px; margin-right:8px;">Изменить</a>
                     {% if can_manage %}
                     <a href="javascript:void(0)" onclick="if(confirm('Сбросить пароль {{ u.name|e }}?')) document.getElementById('resetpw_{{ u.id }}').submit()" style="color:#e65100; text-decoration:none; font-size:12px; margin-right:8px;">Сбросить пароль</a>
                     <form id="resetpw_{{ u.id }}" method="post" action="/api/users/{{ u.id }}/reset-password" style="display:none;"></form>
                     {% endif %}
-                    <a href="javascript:void(0)" onclick="if(confirm('Удалить {{ u.name|e }}?')) document.getElementById('del_{{ u.id }}').submit()" style="color:#c62828; text-decoration:none; font-size:12px;">Удалить</a>
+                    <a href="javascript:void(0)" onclick="if(confirm('Заблокировать {{ u.name|e }}? Задачи будут архивированы.')" style="color:#c62828; text-decoration:none; font-size:12px;" id="dellink_{{ u.id }}">Заблокировать</a>
                     <form id="del_{{ u.id }}" method="post" action="/api/users/{{ u.id }}/delete" style="display:none;"></form>
+                    <script>document.getElementById('dellink_{{ u.id }}').onclick=function(){if(confirm('Заблокировать {{ u.name|e }}? Задачи будут архивированы.'))document.getElementById('del_{{ u.id }}').submit()}</script>
+                    {% else %}
+                    {% if can_manage %}
+                    <a href="javascript:void(0)" onclick="if(confirm('Восстановить {{ u.name|e }}?')) document.getElementById('restore_{{ u.id }}').submit()" style="color:#2e7d32; text-decoration:none; font-size:12px;">Восстановить</a>
+                    <form id="restore_{{ u.id }}" method="post" action="/api/users/{{ u.id }}/restore" style="display:none;"></form>
+                    {% endif %}
+                    {% endif %}
                 </td>
             </tr>
             {% endfor %}
