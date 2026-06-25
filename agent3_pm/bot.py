@@ -1936,7 +1936,7 @@ async def _admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     data = query.data
     username = (update.effective_user.username or "").lower()
-    if username != ADMIN_USERNAME:
+    if username != config.ADMIN_TELEGRAM_USERNAME.lower():
         return False
 
     if data == "adm_whitelist":
