@@ -1701,11 +1701,6 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _handle_forwarded_complaint(update, context)
         return
     if not context.user_data.get("waiting_files"):
-        # If in create mode with pending_task — treat as attachment
-        if context.user_data.get("chat_mode") == "create" and context.user_data.get("pending_task"):
-            context.user_data["waiting_files"] = True
-            await _collect_file(update, context)
-            return
         await _reply(update, "Выбери действие кнопкой меню.", _menu_kb())
         return
     await _collect_file(update, context)
