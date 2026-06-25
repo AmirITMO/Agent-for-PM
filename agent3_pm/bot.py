@@ -351,6 +351,22 @@ async def _get_context_data(session, user) -> dict:
     }
 
 
+async def cmd_resetpassword(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a link to set/reset password."""
+    async with AsyncSessionLocal() as session:
+        user = await get_user_by_telegram_id(session, update.effective_user.id)
+    if not user:
+        await _reply(update, "Ты не зарегистрирован. Нажми /start.")
+        return
+    tok = _make_enter_token(user.id)
+    base = config.WEB_BASE_URL.rstrip("/")
+    url = f"{base}/enter/{user.id}?tok={tok}&amp;next=/set-password"
+    await _reply(update,
+        f"Ссылка для установки пароля (действует 24 часа):\n\n"
+        f'<a href="{base}/enter/{user.id}?tok={tok}&amp;next=/set-password">Установить пароль</a>',
+        _menu_kb())
+
+
 # ── Registration ──
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1977,6 +1993,7 @@ def create_bot_application() -> Application:
            .concurrent_updates(True)
            .build())
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("resetpassword", cmd_resetpassword))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(
