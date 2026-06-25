@@ -137,7 +137,7 @@ def _match_user_genitive(cand: str, users: list):
         nl = u.name.lower()
         words = nl.split()
         for st in stems:
-            if st in nl or any(w.startswith(st) for w in words):
+            if any(w.startswith(st) for w in words):
                 return u
     return None
 
