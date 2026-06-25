@@ -985,8 +985,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _handle_approval_edit(update, context)
         return
 
-    # Editing pending task card (before creation)
-    if context.user_data.get("pending_task"):
+    # Editing pending task card — ONLY in create mode
+    if context.user_data.get("pending_task") and context.user_data.get("chat_mode") == "create":
         text = (update.message.text or "").strip()
         if text and text not in ("Мои задачи", "Просрочки", "Задать задачу", "Спросить по задачам", "Инструкции"):
             await _send_typing(update)
@@ -1082,11 +1082,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text == "Задать задачу":
             context.user_data["chat_mode"] = "create"
             context.user_data["chat_history"] = []
+            context.user_data.pop("pending_task", None)
+            context.user_data.pop("pending_files", None)
+            context.user_data.pop("waiting_files", None)
             await _reply(update, "Опиши задачу — текстом или голосом. Уточню доску и этап, покажу карточку.")
             return
         if text == "Спросить по задачам":
             context.user_data["chat_mode"] = "ask"
             context.user_data["chat_history"] = []
+            context.user_data.pop("pending_task", None)
             await _reply(update, "Спрашивай по задачам или командуй: показать, перенести на этап, удалить, напомнить.")
             return
 
