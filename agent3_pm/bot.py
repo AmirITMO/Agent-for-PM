@@ -979,7 +979,7 @@ _COMPLAINT_TRIGGERS = ("баг", "bug", "жалоба", "ошибка", "сло�
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Forwarded text message — potential bug report
-    if update.message.forward_date or update.message.forward_origin:
+    if update.message.forward_origin:
         await _handle_forwarded_complaint(update, context)
         return
 
@@ -1697,7 +1697,7 @@ async def _handle_forwarded_complaint(update: Update, context: ContextTypes.DEFA
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Forwarded message with photo/document — potential bug report
-    if update.message.forward_date or update.message.forward_origin:
+    if update.message.forward_origin:
         await _handle_forwarded_complaint(update, context)
         return
     if not context.user_data.get("waiting_files"):
