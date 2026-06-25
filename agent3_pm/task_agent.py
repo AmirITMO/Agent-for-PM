@@ -180,6 +180,54 @@ async def smart_assistant(user_message: str, context_data: dict,
         return {"action": "answer", "message": "Ошибка. Попробуй ещё раз."}
 
 
+async def analyze_complaint(text: str, image_paths: list[str] | None = None) -> dict:
+    """Analyze forwarded complaint/bug report, optionally with screenshots."""
+    try:
+        client = _get_client()
+        content = []
+        content.append({"type": "text", "text": f"""Пользователь переслал жалобу клиента или баг-репорт.
+Текст/подпись: {text or '(без текста)'}
+
+Проанализируй и верни JSON:
+{{"title": "краткое название бага (до 10 слов)",
+ "description": "подробное описание: что сломано, как воспроизвести, что видно на скриншоте",
+ "is_bug": true,
+ "priority": 1}}
+
+Если есть скриншот — опиши что на нём видно (какой раздел, какая ошибка, какие данные).
+Верни ТОЛЬКО JSON без markdown."""})
+
+        if image_paths:
+            import base64
+            for path in image_paths[:3]:
+                try:
+                    with open(path, "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode()
+                    ext = path.rsplit(".", 1)[-1].lower()
+                    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                            "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/jpeg")
+                    content.append({"type": "image_url",
+                                    "image_url": {"url": f"data:{mime};base64,{b64}"}})
+                except Exception:
+                    logger.warning(f"Failed to read image {path}")
+
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": content}],
+            temperature=0, max_tokens=1000,
+            response_format={"type": "json_object"},
+        )
+        raw = resp.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw)
+    except Exception:
+        logger.exception("Complaint analysis failed")
+        return {"title": "Баг от клиента", "description": text or "", "is_bug": True, "priority": 1}
+
+
 async def transcribe_voice(file_path: str) -> str | None:
     try:
         client = _get_client()

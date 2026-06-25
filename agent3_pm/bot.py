@@ -973,7 +973,16 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Main handler ──
 
+_COMPLAINT_TRIGGERS = ("баг", "bug", "жалоба", "ошибка", "сломал", "не работа", "клиент жалу",
+                        "проблема", "косяк", "глюк", "крит", "упал", "падает", "broken")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Forwarded text message — potential bug report
+    if update.message.forward_date or update.message.forward_origin:
+        await _handle_forwarded_complaint(update, context)
+        return
+
     # Registration
     if context.user_data.get("reg_step") == "name":
         context.user_data["reg_name"] = update.message.text.strip()
@@ -1628,8 +1637,75 @@ async def _process_smart(update, context, text, session, user):
         await _reply(update, f"Напомню через {delay} мин.")
 
 
+async def _handle_forwarded_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle forwarded messages as bug reports / complaints."""
+    async with AsyncSessionLocal() as session:
+        user = await get_user_by_telegram_id(session, update.effective_user.id)
+    if not user or not user.is_active:
+        await _reply(update, "Нажми /start для регистрации.")
+        return
+
+    msg = update.message
+    caption = (msg.caption or msg.text or "").strip()
+    forwarded_text = msg.text or msg.caption or ""
+
+    low = caption.lower() if caption else ""
+    is_complaint = any(t in low for t in _COMPLAINT_TRIGGERS)
+
+    if not is_complaint and not caption:
+        await _reply(update, "Пересланное сообщение получено. Добавь подпись: «баг», «жалоба» или опиши проблему.",
+                     _menu_kb())
+        return
+
+    await _send_typing(update)
+
+    image_paths = []
+    if msg.photo:
+        file = await msg.photo[-1].get_file()
+        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        tmp.close()
+        await file.download_to_drive(tmp.name)
+        image_paths.append(tmp.name)
+    elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("image/"):
+        file = await msg.document.get_file()
+        ext = os.path.splitext(msg.document.file_name or "file")[1] or ".jpg"
+        tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+        tmp.close()
+        await file.download_to_drive(tmp.name)
+        image_paths.append(tmp.name)
+
+    from agent3_pm.task_agent import analyze_complaint
+    result = await analyze_complaint(caption or forwarded_text, image_paths or None)
+
+    result["is_bug"] = True
+    if result.get("priority") is None or result["priority"] > 1:
+        result["priority"] = 1
+    result["action"] = "create_task"
+
+    context.user_data["chat_mode"] = "create"
+    context.user_data["pending_task"] = result
+    context.user_data["pending_files"] = []
+    context.user_data.pop("_project_confirmed", None)
+    context.user_data.pop("_status_confirmed", None)
+
+    if image_paths:
+        for p in image_paths:
+            context.user_data["pending_files"].append({"path": p, "name": os.path.basename(p), "mime": "image/jpeg"})
+
+    await _ask_next_missing_field(update, context)
+
+
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Forwarded message with photo/document — potential bug report
+    if update.message.forward_date or update.message.forward_origin:
+        await _handle_forwarded_complaint(update, context)
+        return
     if not context.user_data.get("waiting_files"):
+        # If in create mode with pending_task — treat as attachment
+        if context.user_data.get("chat_mode") == "create" and context.user_data.get("pending_task"):
+            context.user_data["waiting_files"] = True
+            await _collect_file(update, context)
+            return
         await _reply(update, "Выбери действие кнопкой меню.", _menu_kb())
         return
     await _collect_file(update, context)
