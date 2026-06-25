@@ -1466,8 +1466,8 @@ class TestWebRoutes:
 class TestGroupChat:
     """TC-20..23: групповой чат — тег, сессии, изоляция, таймаут."""
 
-    def test_bot_username_defined(self):
-        assert bot.BOT_USERNAME == "projectmanageraiibot"
+    def test_bot_usernames_defined(self):
+        assert "projectmanageraiibot" in bot.BOT_USERNAMES
 
     def test_group_sessions_dict(self):
         from agent3_pm.bot import _group_sessions
@@ -1475,18 +1475,21 @@ class TestGroupChat:
 
     def test_mention_detection(self):
         text = "@projectmanageraiibot задай задачу починить сайт"
-        assert f"@{bot.BOT_USERNAME.lower()}" in text.lower()
+        assert any(f"@{name}" in text.lower() for name in bot.BOT_USERNAMES)
 
     def test_mention_text_cleanup(self):
         import re
         text = "@projectmanageraiibot задай задачу починить сайт"
-        clean = re.sub(rf"@{bot.BOT_USERNAME}", "", text, flags=re.IGNORECASE).strip()
+        clean = text
+        for bname in bot.BOT_USERNAMES:
+            clean = re.sub(rf"@{bname}", "", clean, flags=re.IGNORECASE)
+        clean = clean.strip()
         assert clean == "задай задачу починить сайт"
         assert "@" not in clean
 
     def test_no_mention_no_reaction(self):
         text = "привет как дела"
-        assert f"@{bot.BOT_USERNAME.lower()}" not in text.lower()
+        assert not any(f"@{name}" in text.lower() for name in bot.BOT_USERNAMES)
 
     def test_session_creation(self):
         import time
@@ -1548,7 +1551,10 @@ class TestGroupChat:
     def test_mention_with_different_case(self):
         import re
         text = "@ProjectManagerAIIBot задача"
-        clean = re.sub(rf"@{bot.BOT_USERNAME}", "", text, flags=re.IGNORECASE).strip()
+        clean = text
+        for bname in bot.BOT_USERNAMES:
+            clean = re.sub(rf"@{bname}", "", clean, flags=re.IGNORECASE)
+        clean = clean.strip()
         assert clean == "задача"
 
     def test_typing_in_group(self):
@@ -1692,7 +1698,7 @@ class TestBotLogic:
         assert kb is not None
 
     def test_bot_username_constant(self):
-        assert bot.BOT_USERNAME == "projectmanageraiibot"
+        assert "projectmanageraiibot" in bot.BOT_USERNAMES
 
 
 # ── KB Watcher edge cases ──

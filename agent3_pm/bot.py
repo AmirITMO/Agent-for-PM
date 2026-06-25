@@ -1657,7 +1657,7 @@ async def _collect_file(update, context):
             [InlineKeyboardButton("Готово", callback_data="files_done")]]))
 
 
-BOT_USERNAME = "projectmanageraiibot"
+BOT_USERNAMES = {"projectmanageraiibot", "jfjgsjfopgjfpjgpobot"}
 
 # Group sessions: {(chat_id, user_id): {"active": bool, "history": []}}
 _group_sessions: dict[tuple[int, int], dict] = {}
@@ -1690,11 +1690,14 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     key = (chat_id, user_id)
 
     text_lower = text.lower()
-    mentioned = f"@{BOT_USERNAME.lower()}" in text_lower
+    mentioned = any(f"@{name}" in text_lower for name in BOT_USERNAMES)
 
     if mentioned:
         import re, time
-        clean_text = re.sub(rf"@{BOT_USERNAME}", "", text, flags=re.IGNORECASE).strip()
+        clean_text = text
+        for bname in BOT_USERNAMES:
+            clean_text = re.sub(rf"@{bname}", "", clean_text, flags=re.IGNORECASE)
+        clean_text = clean_text.strip()
         _group_sessions[key] = {"active": True, "history": [], "ts": time.time()}
         if clean_text:
             await _process_group_smart(update, context, clean_text, key)
