@@ -34,10 +34,12 @@ async def get_user_by_id(session: AsyncSession, user_id: int) -> User | None:
     return result.scalar_one_or_none()
 
 
-async def get_all_users(session: AsyncSession) -> list[User]:
-    result = await session.execute(
-        select(User).options(selectinload(User.boards)).order_by(User.name)
-    )
+async def get_all_users(session: AsyncSession, include_blocked: bool = False) -> list[User]:
+    q = select(User).options(selectinload(User.boards))
+    if not include_blocked:
+        q = q.where(User.is_active == True)  # noqa: E712
+    q = q.order_by(User.name)
+    result = await session.execute(q)
     return list(result.scalars().all())
 
 

@@ -71,6 +71,45 @@
         .login-card h2 { font-size: 20px; margin-bottom: 20px; text-align: center; }
         .login-card .btn-primary { width: 100%; margin-top: 8px; }
         .login-error { color: #c62828; font-size: 13px; margin-bottom: 12px; text-align: center; }
+
+        /* ── Mobile ── */
+        @media (max-width: 768px) {
+            .header { height: auto; padding: 8px 12px; flex-direction: column; align-items: flex-start; gap: 6px; }
+            .header h1 { font-size: 15px; }
+            .header nav { gap: 4px; width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+            .header nav a { font-size: 12px; padding: 5px 8px; white-space: nowrap; flex-shrink: 0; }
+            .nav-user { display: none; }
+
+            .kanban-wrap { min-height: calc(100vh - 80px); gap: 0; -webkit-overflow-scrolling: touch; }
+            .kanban-col { min-width: 160px; max-width: 180px; }
+            .col-head { padding: 10px 10px 6px; }
+            .col-title { font-size: 11px; }
+            .col-body { padding: 0 4px 4px; }
+            .card { padding: 8px 10px; margin-bottom: 4px; }
+            .card-title { font-size: 12px; }
+            .card-avatar { width: 18px; height: 18px; font-size: 8px; top: 6px; right: 6px; }
+
+            .modal { max-width: 95%; padding: 16px; margin: 8px; }
+            .modal h2 { font-size: 15px; }
+            .form-group input, .form-group select, .form-group textarea { font-size: 16px; padding: 10px; }
+
+            table.list { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+            table.list th, table.list td { padding: 8px 10px; font-size: 12px; white-space: nowrap; }
+
+            .login-card { margin: 24px 12px; padding: 20px; }
+            .login-card h2 { font-size: 18px; }
+
+            .btn { padding: 10px 16px; font-size: 14px; }
+            .add-task { padding: 6px 10px; font-size: 11px; }
+        }
+
+        @media (max-width: 480px) {
+            .kanban-col { min-width: 140px; max-width: 155px; }
+            .card-meta { gap: 4px; }
+            .card-desc { display: none; }
+            .header nav { gap: 2px; }
+            .header nav a { font-size: 11px; padding: 4px 6px; }
+        }
     </style>
 </head>
 <body>

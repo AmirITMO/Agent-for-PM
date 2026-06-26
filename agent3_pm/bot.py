@@ -2121,11 +2121,11 @@ async def _admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data == "adm_whitelist":
         await query.answer()
         async with AsyncSessionLocal() as session:
-            users = await get_all_users(session)
+            users = await get_all_users(session, include_blocked=True)
         lines = ["<b>Вайтлист (активные сотрудники):</b>\n"]
         blocked = []
         for u in sorted(users, key=lambda x: x.name):
-            status = "✅" if (not hasattr(u, "is_active") or u.is_active) else "🚫"
+            status = "✅" if u.is_active else "🚫"
             tg = f"@{u.telegram_username}" if u.telegram_username else "—"
             lines.append(f"{status} {u.name} ({u.position or '—'}) {tg}")
             if hasattr(u, "is_active") and not u.is_active:
@@ -2141,8 +2141,8 @@ async def _admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data == "adm_block":
         await query.answer()
         async with AsyncSessionLocal() as session:
-            users = await get_all_users(session)
-        active = [u for u in users if not hasattr(u, "is_active") or u.is_active]
+            users = await get_all_users(session, include_blocked=True)
+        active = [u for u in users if u.is_active]
         rows = []
         for u in active:
             rows.append([InlineKeyboardButton(f"🚫 {u.name}", callback_data=f"adm_doblock_{u.id}")])
@@ -2157,8 +2157,8 @@ async def _admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data == "adm_unblock":
         await query.answer()
         async with AsyncSessionLocal() as session:
-            users = await get_all_users(session)
-        blocked = [u for u in users if hasattr(u, "is_active") and not u.is_active]
+            users = await get_all_users(session, include_blocked=True)
+        blocked = [u for u in users if not u.is_active]
         if not blocked:
             try:
                 await query.edit_message_text("Нет заблокированных сотрудников.")

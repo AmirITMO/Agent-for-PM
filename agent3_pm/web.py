@@ -331,7 +331,7 @@ async def employees(request: Request, session: AsyncSession = Depends(get_sessio
     current = await _current_user(request, session)
     if not _can_manage(current):
         return RedirectResponse("/board")
-    users = await repo.get_all_users(session)
+    users = await repo.get_all_users(session, include_blocked=True)
     projects = await repo.get_all_projects(session)
     return templates.TemplateResponse(request, "employees.html", {
         "users": users, "projects": projects,
