@@ -1345,8 +1345,8 @@ async def _ask_next_missing_field(update, context, ctx_data=None):
             [InlineKeyboardButton("P2 — обычный", callback_data="crt_prio_2"),
              InlineKeyboardButton("P3 — низкий", callback_data="crt_prio_3")],
         ]
-            await _reply(update, "Какой приоритет?", InlineKeyboardMarkup(buttons))
-            return
+        await _reply(update, "Какой приоритет?", InlineKeyboardMarkup(buttons))
+        return
 
     # 4. Исполнитель — ВСЕГДА спрашиваем кнопками
     if not td.get("_assignee_confirmed"):
