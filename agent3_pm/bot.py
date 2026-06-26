@@ -1003,19 +1003,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await _reply(update, f"Исполнитель: {match.name}")
                 await _ask_next_missing_field(update, context)
             else:
-                rows = []
-                row = []
-                for u in all_users:
-                    row.append(InlineKeyboardButton(u.name, callback_data=f"crt_user_{u.id}"))
-                    if len(row) == 2:
-                        rows.append(row)
-                        row = []
-                if row:
-                    rows.append(row)
-                rows.append([InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")])
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")]
+                ])
                 context.user_data["_waiting_assignee_name"] = True
-                await _reply(update, f"Сотрудник «{text_input}» не найден. Выберите из списка или напишите точнее.",
-                             InlineKeyboardMarkup(rows))
+                await _reply(update, f"Сотрудник «{text_input}» не найден. Напишите имя точнее или нажмите кнопку.",
+                             kb)
             return
 
     # Editing pending task card — ONLY in create mode
@@ -1348,23 +1341,23 @@ async def _ask_next_missing_field(update, context, ctx_data=None):
         await _reply(update, "Какой приоритет?", InlineKeyboardMarkup(buttons))
         return
 
-    # 4. Исполнитель — ВСЕГДА спрашиваем кнопками
+    # 4. Исполнитель — авто-подтверждаем если GPT нашёл валидное имя, иначе спрашиваем текстом
     if not td.get("_assignee_confirmed"):
-        td["assignee_name"] = None
-        rows = []
-        row = []
-        for u in real_users_list:
-            row.append(InlineKeyboardButton(u.name, callback_data=f"crt_user_{u.id}"))
-            if len(row) == 2:
-                rows.append(row)
-                row = []
-        if row:
-            rows.append(row)
-        rows.append([InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")])
-        context.user_data["_waiting_assignee_name"] = True
-        await _reply(update, "Кому назначить задачу? Нажмите кнопку или напишите имя.",
-                     InlineKeyboardMarkup(rows))
-        return
+        if td.get("assignee_name"):
+            match = _fuzzy_match_user(td["assignee_name"], real_users_list)
+            if match:
+                td["assignee_name"] = match.name
+                td["_assignee_confirmed"] = True
+            else:
+                td["assignee_name"] = None
+        if not td.get("_assignee_confirmed"):
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")]
+            ])
+            context.user_data["_waiting_assignee_name"] = True
+            await _reply(update, "Кому назначить задачу? Напишите имя или нажмите кнопку.",
+                         kb)
+            return
 
     await _show_final_card(update, context)
 
