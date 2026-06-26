@@ -381,10 +381,21 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pos = f" ({user.position})" if user.position else ""
         await _reply(update, f"Привет, {user.name}{pos}!\n\n{_link_board(user.id)}", _menu_kb())
         return
+    # Try auto-bind by telegram username (whitelist: admin creates user on web first)
+    username = update.effective_user.username
+    if username:
+        async with AsyncSessionLocal() as session:
+            existing = await get_user_by_telegram_username(session, username)
+            if existing and not existing.telegram_id:
+                await bind_telegram_id(session, existing.id, update.effective_user.id)
+                pos = f" ({existing.position})" if existing.position else ""
+                await _reply(update, f"Привет, {existing.name}{pos}!\n\n{_link_board(existing.id)}", _menu_kb())
+                return
     await update.message.reply_text(
-        "Привет! Это трекер задач MarketAI.\nЧтобы начать — зарегистрируйся.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Зарегистрироваться", callback_data="register")]]))
+        "Привет! Это трекер задач MarketAI.\n\n"
+        "Твой аккаунт не найден. Попроси руководителя добавить тебя "
+        "через веб-трекер (раздел «Сотрудники»), указав твой Telegram: @" + (username or "???") + ".\n\n"
+        "После этого нажми /start ещё раз.")
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -404,33 +415,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "register":
         await query.answer()
-        username = update.effective_user.username
-        if username:
-            async with AsyncSessionLocal() as session:
-                existing = await get_user_by_telegram_username(session, username)
-                if existing and not existing.telegram_id:
-                    await bind_telegram_id(session, existing.id, update.effective_user.id)
-                    await query.message.reply_text(f"Аккаунт найден: {existing.name}")
-                    await _reply(update, f"{_link_board(existing.id)}", _menu_kb())
-                    return
-        context.user_data["reg_step"] = "name"
-        await query.message.reply_text("Как тебя зовут? Напиши имя и фамилию.")
-
-    elif data.startswith("pos_"):
-        await query.answer()
-        idx = int(data.split("_")[1])
-        position = POSITIONS[idx] if 0 <= idx < len(POSITIONS) else None
-        name = context.user_data.get("reg_name")
-        if not name:
-            await query.message.reply_text("Нажми /start заново.")
-            return
-        username = update.effective_user.username
-        async with AsyncSessionLocal() as session:
-            user = await register_user(session, telegram_id=update.effective_user.id,
-                                       telegram_username=username, name=name, position=position)
-        context.user_data.clear()
-        await query.message.reply_text(f"Зарегистрирован: {user.name} ({position})")
-        await _reply(update, f"{_link_board(user.id)}", _menu_kb())
+        await query.message.reply_text(
+            "Регистрация через вайтлист. Попроси руководителя добавить тебя "
+            "через веб-трекер (раздел «Сотрудники»), указав твой Telegram username.\n\n"
+            "После этого нажми /start.")
+        return
 
     elif data == "files_yes":
         await query.answer()
@@ -485,6 +474,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("crt_user_"):
         await query.answer()
+        context.user_data.pop("_waiting_assignee_name", None)
         val = data.replace("crt_user_", "")
         td = context.user_data.get("pending_task")
         if td is not None:
@@ -833,6 +823,7 @@ async def _edit_pending_task(update: Update, context: ContextTypes.DEFAULT_TYPE,
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": edit_prompt}],
             temperature=0, max_tokens=500,
+            response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content.strip()
         if raw.startswith("```"):
@@ -983,12 +974,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _handle_forwarded_complaint(update, context)
         return
 
-    # Registration
-    if context.user_data.get("reg_step") == "name":
-        context.user_data["reg_name"] = update.message.text.strip()
-        context.user_data["reg_step"] = "position"
-        await update.message.reply_text("Выбери должность:", reply_markup=_positions_kb())
-        return
+    # Save last message for complaint trigger detection (used by forwarded messages that follow)
+    _raw = (update.message.text or "").strip()
+    if _raw:
+        context.user_data["_last_msg"] = _raw
+        context.user_data["_last_msg_ts"] = time.time()
 
     if context.user_data.get("waiting_files"):
         await _collect_file(update, context)
@@ -998,6 +988,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("editing_batch"):
         await _handle_approval_edit(update, context)
         return
+
+    # Waiting for assignee name input — search DB by name
+    if context.user_data.get("_waiting_assignee_name") and context.user_data.get("pending_task"):
+        text_input = (update.message.text or "").strip()
+        if text_input and text_input not in ("Мои задачи", "Просрочки", "Задать задачу", "Спросить по задачам", "Инструкции"):
+            context.user_data.pop("_waiting_assignee_name", None)
+            async with AsyncSessionLocal() as session:
+                all_users = await get_all_users(session)
+            match = _fuzzy_match_user(text_input, all_users) or _match_user_genitive(text_input, all_users)
+            if match:
+                context.user_data["pending_task"]["assignee_name"] = match.name
+                context.user_data["pending_task"]["_assignee_confirmed"] = True
+                await _reply(update, f"Исполнитель: {match.name}")
+                await _ask_next_missing_field(update, context)
+            else:
+                rows = []
+                row = []
+                for u in all_users:
+                    row.append(InlineKeyboardButton(u.name, callback_data=f"crt_user_{u.id}"))
+                    if len(row) == 2:
+                        rows.append(row)
+                        row = []
+                if row:
+                    rows.append(row)
+                rows.append([InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")])
+                context.user_data["_waiting_assignee_name"] = True
+                await _reply(update, f"Сотрудник «{text_input}» не найден. Выберите из списка или напишите точнее.",
+                             InlineKeyboardMarkup(rows))
+            return
 
     # Editing pending task card — ONLY in create mode
     if context.user_data.get("pending_task") and context.user_data.get("chat_mode") == "create":
@@ -1037,49 +1056,81 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if text == "Инструкции":
             instructions = (
-                "<b>Как пользоваться трекером</b>\n\n"
+                "<b>Трекер задач MarketAI — инструкция</b>\n\n"
+
+                "<b>Регистрация:</b>\n"
+                "Регистрация по вайтлисту. Руководитель добавляет "
+                "сотрудника через веб-трекер (раздел «Сотрудники»), "
+                "указав имя, должность и Telegram username.\n"
+                "После этого сотрудник нажимает /start — бот "
+                "автоматически привязывает аккаунт.\n\n"
 
                 "<b>Кнопки меню:</b>\n"
-                "- Мои задачи — все твои активные задачи со ссылками\n"
-                "- Просрочки — просроченные, горящие и баги\n"
-                "- Задать задачу — создать задачу текстом или голосовым\n"
+                "- Мои задачи — список твоих активных задач со ссылками\n"
+                "- Просрочки — просроченные, горящие задачи и баги\n"
+                "- Задать задачу — создать задачу (текст, голос или пересылка)\n"
                 "- Спросить по задачам — вопросы и управление канбаном\n"
                 "- Инструкции — это сообщение\n\n"
 
                 "<b>Создание задачи:</b>\n"
-                "Нажми «Задать задачу» и опиши что нужно.\n"
-                "Можно текстом или голосовым сообщением.\n"
-                "Агент уточнит доску и этап, покажет карточку.\n"
-                "Можно прикрепить файлы.\n\n"
+                "1. Нажми «Задать задачу»\n"
+                "2. Опиши задачу текстом или голосовым сообщением\n"
+                "3. Агент уточнит по порядку: доску, этап, приоритет, исполнителя\n"
+                "4. Исполнителя можно выбрать кнопкой или написать имя\n"
+                "5. Покажет карточку — можно отредактировать текстом\n"
+                "6. Можно прикрепить файлы\n"
+                "7. Ответственный получит уведомление в личку\n\n"
+
+                "<b>Баг-репорт через пересылку:</b>\n"
+                "1. Напиши боту: баг (или жалоба, ошибка, проблема)\n"
+                "2. Перешли скриншоты и сообщения от клиента\n"
+                "   (можно несколько подряд — бот соберёт всё)\n"
+                "3. Агент проанализирует все скрины и тексты,\n"
+                "   составит карточку бага и уточнит доску/этап\n\n"
 
                 "<b>Управление через «Спросить»:</b>\n"
                 "- Какие задачи у Амира?\n"
                 "- Какие задачи у CEO?\n"
+                "- Отчёт по всем сотрудникам\n"
                 "- Что просрочено?\n"
                 "- Переставь задачу X на следующий этап\n"
                 "- Перенеси задачу X на доску Marketing\n"
                 "- Отметь задачу X выполненной\n"
-                "- Удали задачу X\n"
+                "- Удали задачу X / Удали все задачи у Ромы\n"
                 "- Напомни через 30 минут проверить отчёт\n\n"
 
                 "<b>В групповых чатах:</b>\n"
                 "Добавь бота в рабочую группу.\n"
                 "Тегни @projectmanageraiibot и опиши задачу.\n"
-                "Бот уточнит детали и создаст задачу на канбане.\n"
-                "Ответственный получит уведомление в личку.\n\n"
+                "Бот создаст задачу на канбане.\n"
+                "Ответственный получит уведомление в личку.\n"
+                "После @mention бот слушает 5 минут без повторного тега.\n\n"
+
+                "<b>Уведомления:</b>\n"
+                "- При назначении задачи — исполнителю\n"
+                "- При переназначении — и новому, и старому исполнителю\n"
+                "- При изменении задачи — исполнителю\n"
+                "- При выполнении задачи — руководителям\n"
+                "- Утренняя сводка руководителям в 9:00\n"
+                "- Напоминания о дедлайнах 3 раза в день (9, 13, 18)\n"
+                "- Эскалация менеджерам при просрочке > 2 дней\n\n"
 
                 "<b>Автоматика:</b>\n"
-                "- Новые задачи из созвонов и записей (база знаний)\n"
-                "- TOP-1 получает задачи на утверждение\n"
-                "- Утренняя сводка руководителям в 9:00\n"
-                "- Напоминания о дедлайнах 3 раза в день\n"
-                "- Уведомление при назначении задачи\n"
-                "- Уведомление менеджерам при выполнении задачи\n\n"
+                "- Новые задачи из созвонов (база знаний GitHub)\n"
+                "- Руководители получают задачи на утверждение\n"
+                "- Архивация завершённых задач через 90 дней\n\n"
 
                 "<b>Веб-трекер:</b>\n"
                 f"{_link_board(user.id)}\n"
-                "Канбан по проектам, редактирование, комментарии,\n"
-                "файлы, удаление, кнопка «Выполнено»."
+                "Канбан по проектам, «Мои задачи», редактирование,\n"
+                "комментарии, файлы, смена статуса, кнопка «Выполнено».\n\n"
+
+                "<b>Для руководителей (Level 1):</b>\n"
+                "- Раздел «Сотрудники» — добавление, редактирование,\n"
+                "  назначение досок, сброс пароля\n"
+                "- Раздел «Настройки» — время сводки, интервал дедлайнов\n"
+                "- /admin — блокировка/разблокировка сотрудников\n"
+                "- /resetpassword — ссылка для установки пароля"
             )
             await _reply(update, instructions, _menu_kb())
             return
@@ -1286,44 +1337,34 @@ async def _ask_next_missing_field(update, context, ctx_data=None):
         await _reply(update, "На какой этап поставить?", InlineKeyboardMarkup(buttons))
         return
 
-    # 3. Приоритет — авто-подтверждаем если GPT вернул 0-3, иначе спрашиваем
+    # 3. Приоритет — ВСЕГДА спрашиваем кнопками
     if not td.get("_priority_confirmed"):
-        gpt_prio = td.get("priority")
-        if gpt_prio is not None and gpt_prio in (0, 1, 2, 3):
-            td["_priority_confirmed"] = True
-        else:
-            td["priority"] = DEFAULT_PRIORITY
-            buttons = [
-                [InlineKeyboardButton("P0 — срочно", callback_data="crt_prio_0"),
-                 InlineKeyboardButton("P1 — высокий", callback_data="crt_prio_1")],
-                [InlineKeyboardButton("P2 — обычный", callback_data="crt_prio_2"),
-                 InlineKeyboardButton("P3 — низкий", callback_data="crt_prio_3")],
-            ]
+        buttons = [
+            [InlineKeyboardButton("P0 — срочно", callback_data="crt_prio_0"),
+             InlineKeyboardButton("P1 — высокий", callback_data="crt_prio_1")],
+            [InlineKeyboardButton("P2 — обычный", callback_data="crt_prio_2"),
+             InlineKeyboardButton("P3 — низкий", callback_data="crt_prio_3")],
+        ]
             await _reply(update, "Какой приоритет?", InlineKeyboardMarkup(buttons))
             return
 
-    # 4. Исполнитель — авто-подтверждаем если GPT нашёл имя и оно совпадает с реальным сотрудником
+    # 4. Исполнитель — ВСЕГДА спрашиваем кнопками
     if not td.get("_assignee_confirmed"):
-        if td.get("assignee_name"):
-            match = _fuzzy_match_user(td["assignee_name"], real_users_list)
-            if match:
-                td["assignee_name"] = match.name
-                td["_assignee_confirmed"] = True
-            else:
-                td["assignee_name"] = None
-        if not td.get("_assignee_confirmed"):
-            rows = []
-            row = []
-            for u in real_users_list:
-                row.append(InlineKeyboardButton(u.name, callback_data=f"crt_user_{u.id}"))
-                if len(row) == 2:
-                    rows.append(row)
-                    row = []
-            if row:
+        td["assignee_name"] = None
+        rows = []
+        row = []
+        for u in real_users_list:
+            row.append(InlineKeyboardButton(u.name, callback_data=f"crt_user_{u.id}"))
+            if len(row) == 2:
                 rows.append(row)
-            rows.append([InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")])
-            await _reply(update, "Кому назначить задачу?", InlineKeyboardMarkup(rows))
-            return
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([InlineKeyboardButton("Без ответственного", callback_data="crt_user_none")])
+        context.user_data["_waiting_assignee_name"] = True
+        await _reply(update, "Кому назначить задачу? Нажмите кнопку или напишите имя.",
+                     InlineKeyboardMarkup(rows))
+        return
 
     await _show_final_card(update, context)
 
@@ -1638,7 +1679,13 @@ async def _process_smart(update, context, text, session, user):
 
 
 async def _handle_forwarded_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle forwarded messages as bug reports / complaints."""
+    """Batch forwarded messages into a single bug report.
+
+    Flow: user sends 'баг' (saved as _last_msg) → forwards N screenshots →
+    bot collects all into one batch → after 3s pause → GPT analysis → bug card.
+    """
+    import asyncio
+
     async with AsyncSessionLocal() as session:
         user = await get_user_by_telegram_id(session, update.effective_user.id)
     if not user or not user.is_active:
@@ -1646,36 +1693,106 @@ async def _handle_forwarded_complaint(update: Update, context: ContextTypes.DEFA
         return
 
     msg = update.message
-    caption = (msg.caption or msg.text or "").strip()
-    forwarded_text = msg.text or msg.caption or ""
+    caption = (msg.caption or "").strip()
+    fwd_text = (msg.text or "").strip()
 
-    low = caption.lower() if caption else ""
-    is_complaint = any(t in low for t in _COMPLAINT_TRIGGERS)
+    # Check if previous message was a complaint trigger (e.g. user typed "баг" before forwarding)
+    trigger = context.user_data.get("_last_msg", "")
+    trigger_ts = context.user_data.get("_last_msg_ts", 0)
+    has_trigger = (time.time() - trigger_ts < 60
+                   and len(trigger) < 100
+                   and any(t in trigger.lower() for t in _COMPLAINT_TRIGGERS))
 
-    if not is_complaint and not caption:
-        await _reply(update, "Пересланное сообщение получено. Добавь подпись: «баг», «жалоба» или опиши проблему.",
-                     _menu_kb())
-        return
+    effective_caption = caption or (trigger if has_trigger else "")
 
-    await _send_typing(update)
+    # Initialize or extend batch (120s window between forwards)
+    batch = context.user_data.get("_complaint_batch")
+    is_new = not batch or time.time() - batch.get("ts", 0) > 120
+    if is_new:
+        batch = {"caption": effective_caption, "files": [], "texts": [], "ts": time.time()}
+        context.user_data["_complaint_batch"] = batch
+    else:
+        batch["ts"] = time.time()
+        if effective_caption and not batch["caption"]:
+            batch["caption"] = effective_caption
 
-    image_paths = []
+    # Collect photo/document
     if msg.photo:
         file = await msg.photo[-1].get_file()
         tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
         tmp.close()
         await file.download_to_drive(tmp.name)
-        image_paths.append(tmp.name)
+        batch["files"].append({"path": tmp.name, "name": os.path.basename(tmp.name), "mime": "image/jpeg"})
     elif msg.document and msg.document.mime_type and msg.document.mime_type.startswith("image/"):
         file = await msg.document.get_file()
         ext = os.path.splitext(msg.document.file_name or "file")[1] or ".jpg"
         tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
         tmp.close()
         await file.download_to_drive(tmp.name)
-        image_paths.append(tmp.name)
+        batch["files"].append({"path": tmp.name, "name": os.path.basename(tmp.name), "mime": msg.document.mime_type})
+
+    if fwd_text:
+        batch["texts"].append(fwd_text)
+
+    # Nothing at all — ask for context
+    if not batch["caption"] and not batch["texts"] and not batch["files"]:
+        context.user_data.pop("_complaint_batch", None)
+        await _reply(update, "Пересланное сообщение получено. Добавь подпись: «баг», «жалоба» или опиши проблему.",
+                     _menu_kb())
+        return
+
+    # Acknowledge first message in batch
+    if is_new:
+        n_files = len(batch["files"])
+        label = f"фото ({n_files})" if n_files else "материал"
+        await _reply(update, f"Получил {label}. Жду ещё материалы...")
+
+    # Cancel previous timer, schedule new one (3s after last forward)
+    old_task = context.user_data.get("_complaint_timer")
+    if old_task and not old_task.done():
+        old_task.cancel()
+
+    upd = update
+    ctx = context
+
+    async def _delayed():
+        try:
+            await asyncio.sleep(3)
+            await _finalize_complaint_batch(upd, ctx)
+        except asyncio.CancelledError:
+            pass
+
+    context.user_data["_complaint_timer"] = asyncio.create_task(_delayed())
+
+
+async def _finalize_complaint_batch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process batched complaint — GPT analysis → bug card → ask project/status."""
+    batch = context.user_data.pop("_complaint_batch", None)
+    context.user_data.pop("_complaint_timer", None)
+    context.user_data.pop("_last_msg", None)
+    context.user_data.pop("_last_msg_ts", None)
+
+    if not batch:
+        return
+
+    caption = batch.get("caption", "")
+    texts = batch.get("texts", [])
+    files = batch.get("files", [])
+
+    full_text = caption
+    if texts:
+        full_text = (full_text + "\n\n" if full_text else "") + "\n".join(texts)
+
+    n = len(files)
+    if n:
+        await _reply(update, f"Анализирую {n} скриншот(ов)...")
+
+    await _send_typing(update)
+
+    image_paths = [f["path"] for f in files]
 
     from agent3_pm.task_agent import analyze_complaint
-    result = await analyze_complaint(caption or forwarded_text, image_paths or None)
+    result = await analyze_complaint(full_text or "Баг (см. скриншоты)", image_paths or None)
 
     result["is_bug"] = True
     if result.get("priority") is None or result["priority"] > 1:
@@ -1684,13 +1801,9 @@ async def _handle_forwarded_complaint(update: Update, context: ContextTypes.DEFA
 
     context.user_data["chat_mode"] = "create"
     context.user_data["pending_task"] = result
-    context.user_data["pending_files"] = []
-    context.user_data.pop("_project_confirmed", None)
-    context.user_data.pop("_status_confirmed", None)
-
-    if image_paths:
-        for p in image_paths:
-            context.user_data["pending_files"].append({"path": p, "name": os.path.basename(p), "mime": "image/jpeg"})
+    context.user_data["pending_files"] = list(files) if files else []
+    result.pop("_project_confirmed", None)
+    result.pop("_status_confirmed", None)
 
     await _ask_next_missing_field(update, context)
 

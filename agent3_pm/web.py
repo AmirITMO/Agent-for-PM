@@ -362,6 +362,12 @@ async def create_user_api(request: Request, session: AsyncSession = Depends(get_
     name = form.get("name", "").strip()
     position = form.get("position", "").strip() or None
     username = form.get("telegram_username", "").strip().lstrip("@") or None
+    if not name:
+        return RedirectResponse("/employees", status_code=303)
+    if username:
+        existing = await repo.get_user_by_telegram_username(session, username)
+        if existing:
+            return RedirectResponse("/employees?error=username_taken", status_code=303)
     await repo.create_user(session, name=name, position=position, telegram_username=username)
     return RedirectResponse("/employees", status_code=303)
 
@@ -529,6 +535,9 @@ async def update_task_api(task_id: int, request: Request,
 @app.post("/api/tasks/{task_id}/status", response_class=RedirectResponse)
 async def update_task_status_api(task_id: int, request: Request,
                                  session: AsyncSession = Depends(get_session)):
+    current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     status = form.get("status")
     redirect = form.get("redirect", "/board")
@@ -544,6 +553,9 @@ async def update_task_status_api(task_id: int, request: Request,
 @app.post("/api/tasks/{task_id}/done", response_class=RedirectResponse)
 async def mark_done_api(task_id: int, request: Request,
                         session: AsyncSession = Depends(get_session)):
+    current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     redirect = form.get("redirect", "/board")
     if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
@@ -557,6 +569,9 @@ async def mark_done_api(task_id: int, request: Request,
 @app.post("/api/tasks/{task_id}/delete", response_class=RedirectResponse)
 async def delete_task_api(task_id: int, request: Request,
                           session: AsyncSession = Depends(get_session)):
+    current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     redirect = form.get("redirect", "/board")
     if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
@@ -635,18 +650,26 @@ async def _notify_task_updated(session, task, updater_id: int | None,
         from telegram import Bot
         bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
         notified = set()
+        assignee_changed = old_assignee_id is not None and old_assignee_id != task.assignee_id
 
         # Notify current assignee (if different from updater)
         if task.assignee and task.assignee.telegram_id and task.assignee_id != updater_id:
-            text = (f"Изменение по задаче от {updater_name}\n\n"
-                    f"<b>{task.title}</b>\n"
-                    f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
+            if assignee_changed:
+                project = task.project.name if task.project else "—"
+                text = (f"Тебе назначена задача от {updater_name}\n\n"
+                        f"<b>{task.title}</b>\n"
+                        f"Проект: {project}\nПриоритет: P{task.priority}\n"
+                        f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
+            else:
+                text = (f"Изменение по задаче от {updater_name}\n\n"
+                        f"<b>{task.title}</b>\n"
+                        f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
             await bot.send_message(chat_id=task.assignee.telegram_id, text=text,
                                    parse_mode="HTML", disable_web_page_preview=True)
             notified.add(task.assignee_id)
 
         # If assignee changed, notify the OLD assignee too
-        if old_assignee_id and old_assignee_id != task.assignee_id and old_assignee_id not in notified:
+        if assignee_changed and old_assignee_id and old_assignee_id not in notified:
             old_user = await repo.get_user_by_id(session, old_assignee_id)
             if old_user and old_user.telegram_id and old_user.id != updater_id:
                 text = (f"Задача переназначена пользователем {updater_name}\n\n"

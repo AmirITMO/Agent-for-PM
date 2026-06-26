@@ -8,8 +8,8 @@ from agent3_pm import repository as repo
 async def seed():
     await init_db()
     async with AsyncSessionLocal() as session:
-        await repo.create_user(session, "Roman Vassiliev", position="CEO")
-        await repo.create_user(session, "Амир Хайруллин", position="МОП")
+        await repo.create_user(session, "Roman Vassiliev", position="CEO", telegram_username="ttzzsshh")
+        await repo.create_user(session, "Амир Хайруллин", position="МОП", telegram_username="katranamir")
 
         dev = await repo.create_project(session, "MarketAI Dev")
         marketing = await repo.create_project(session, "MarketAI Marketing")
