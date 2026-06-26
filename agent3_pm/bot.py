@@ -241,11 +241,12 @@ async def _send_team_report(update, session, asker):
 
 
 async def _format_user_tasks(session, target, asker) -> str:
-    """Deterministic list of target's tasks (all statuses, non-archived) with auto-login links."""
+    """Deterministic list of target's active tasks with auto-login links."""
+    from agent3_pm.models import ACTIVE_STATUSES
     tasks = await get_all_tasks(session, assignee_id=target.id)
-    tasks = [t for t in tasks if not t.archived_at]
+    tasks = [t for t in tasks if not t.archived_at and t.status in ACTIVE_STATUSES]
     if not tasks:
-        return f"У {target.name} нет задач."
+        return f"У {target.name} нет активных задач."
     base = config.WEB_BASE_URL.rstrip("/")
     lines = [f"<b>Задачи {target.name} ({len(tasks)}):</b>\n"]
     for i, t in enumerate(tasks, 1):
