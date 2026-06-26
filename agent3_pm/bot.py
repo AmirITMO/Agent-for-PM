@@ -1461,10 +1461,15 @@ async def _process_smart(update, context, text, session, user):
 
     action = result.get("action", "answer")
 
-    # Hard guard: GPT sometimes returns create_task in ask mode — block it
+    # Hard guard: GPT sometimes returns wrong action for the mode
     if mode == "ask" and action == "create_task":
         await _reply(update, "Чтобы создать задачу, нажми кнопку «Задать задачу».")
         return
+    if mode == "create" and action in ("answer", "update_task", "delete_task", "delete_tasks", "set_reminder"):
+        result["action"] = "create_task"
+        if not result.get("title"):
+            result["title"] = text[:80]
+        action = "create_task"
 
     if action == "clarify":
         msg = result.get("message", "Уточни, пожалуйста.")
