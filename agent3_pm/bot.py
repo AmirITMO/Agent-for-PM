@@ -17,7 +17,7 @@ from telegram.constants import ParseMode
 
 from agent3_pm.config import config
 from agent3_pm.database import AsyncSessionLocal
-from agent3_pm.models import POSITIONS, TaskStatus, DEFAULT_PRIORITY
+from agent3_pm.models import POSITIONS, TaskStatus, DEFAULT_PRIORITY, is_level_1
 from agent3_pm.repository import (
     get_user_by_telegram_id, get_user_by_telegram_username,
     register_user, bind_telegram_id,
@@ -2100,10 +2100,11 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin panel — only for configured admin username."""
-    username = (update.effective_user.username or "").lower()
-    if username != config.ADMIN_TELEGRAM_USERNAME.lower():
-        await update.message.reply_text("Доступ запрещён.")
+    """Admin panel — available to all Level 1 users."""
+    async with AsyncSessionLocal() as session:
+        user = await get_user_by_telegram_id(session, update.effective_user.id)
+    if not user or not is_level_1(user.position):
+        await update.message.reply_text("Доступ запрещён. Только для руководителей (Level 1).")
         return
     context.user_data["admin_mode"] = True
     kb = InlineKeyboardMarkup([
@@ -2119,8 +2120,9 @@ async def _admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handle admin callbacks. Returns True if handled."""
     query = update.callback_query
     data = query.data
-    username = (update.effective_user.username or "").lower()
-    if username != config.ADMIN_TELEGRAM_USERNAME.lower():
+    async with AsyncSessionLocal() as session:
+        adm_user = await get_user_by_telegram_id(session, update.effective_user.id)
+    if not adm_user or not is_level_1(adm_user.position):
         return False
 
     if data == "adm_whitelist":
