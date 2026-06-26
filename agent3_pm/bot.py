@@ -1157,6 +1157,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _reply(update, "Выбери действие кнопкой меню.", _menu_kb())
             return
 
+        # In create mode, short complaint triggers → wait for forwarded content, don't create task
+        if context.user_data.get("chat_mode") == "create":
+            low = text.lower()
+            if len(text) < 50 and any(t in low for t in _COMPLAINT_TRIGGERS):
+                context.user_data["_last_msg"] = text
+                context.user_data["_last_msg_ts"] = time.time()
+                await _reply(update, "Перешли скриншоты или сообщения с багом. Бот соберёт всё в одну задачу.")
+                return
+
         # In chat mode — send to smart assistant
         await _process_smart(update, context, text, session, user)
 
