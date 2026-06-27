@@ -29,6 +29,13 @@ async def main():
     set_scheduler(scheduler)
     scheduler.start()
 
+    # Initialize KB context (RAG) in background
+    try:
+        from agent3_pm.kb_context import init_kb
+        _kb_task = asyncio.create_task(init_kb())  # noqa: F841
+    except Exception:
+        logger.warning("KB context init failed, continuing without it")
+
     logger.info("All systems ready. Running bot polling...")
     await bot_app.initialize()
     await bot_app.start()

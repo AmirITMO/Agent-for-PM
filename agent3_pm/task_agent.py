@@ -185,9 +185,20 @@ async def analyze_complaint(text: str, image_paths: list[str] | None = None) -> 
     """Analyze forwarded complaint/bug report, optionally with screenshots."""
     try:
         client = _get_client()
+
+        # RAG: подгружаем контекст из базы знаний компании
+        kb_context = ""
+        try:
+            from agent3_pm.kb_context import get_context_for_complaint
+            kb_context = await get_context_for_complaint(text or "баг")
+        except Exception:
+            logger.debug("KB context not available")
+
         content = []
-        content.append({"type": "text", "text": f"""Пользователь сообщил о баге.
+        prompt = f"""Пользователь сообщил о баге.
 Текст: {text or '(без текста)'}
+
+{kb_context}
 
 Верни JSON:
 {{"title": "краткое название бага (до 10 слов)",
@@ -196,11 +207,12 @@ async def analyze_complaint(text: str, image_paths: list[str] | None = None) -> 
  "priority": 0}}
 
 ПРАВИЛА для description:
-- Используй ТОЛЬКО информацию из текста пользователя. НЕ придумывай детали.
-- НЕ добавляй фразы про скриншоты, ошибки загрузки, пустые страницы — если этого НЕТ в тексте.
-- Если текст короткий — description = тот же текст, чуть отформатированный.
+- Используй информацию из текста пользователя. НЕ придумывай детали которых нет.
+- Если есть контекст из базы знаний — используй его чтобы точнее описать проблему (какой раздел, какой функционал затронут).
+- Если текст короткий и нет контекста — description = тот же текст.
 - Если есть скриншот — опиши ТОЛЬКО то, что реально видно на нём.
-Верни ТОЛЬКО JSON."""})
+Верни ТОЛЬКО JSON."""
+        content.append({"type": "text", "text": prompt})
 
         if image_paths:
             import base64
