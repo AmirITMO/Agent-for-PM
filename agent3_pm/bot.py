@@ -1828,10 +1828,22 @@ async def _finalize_complaint_batch(update: Update, context: ContextTypes.DEFAUL
         result["priority"] = 1
     result["action"] = "create_task"
 
+    # Баги автоматом на доску Dev
+    async with AsyncSessionLocal() as session:
+        from agent3_pm.repository import get_project_by_name
+        dev_proj = await get_project_by_name(session, "MarketAI Dev")
+        if not dev_proj:
+            all_proj = await get_all_projects(session)
+            dev_proj = next((p for p in all_proj if "dev" in p.name.lower()), None)
+        if dev_proj:
+            result["project_name"] = dev_proj.name
+            result["_project_confirmed"] = True
+
     context.user_data["chat_mode"] = "create"
     context.user_data["pending_task"] = result
     context.user_data["pending_files"] = list(files) if files else []
-    result.pop("_project_confirmed", None)
+    if not result.get("_project_confirmed"):
+        result.pop("_project_confirmed", None)
     result.pop("_status_confirmed", None)
 
     await _ask_next_missing_field(update, context)
