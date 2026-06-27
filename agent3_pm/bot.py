@@ -1452,7 +1452,8 @@ async def _show_final_card(update, context):
             idx = batch["current_idx"]
             batch["tasks"][idx] = td
             context.user_data.pop("pending_task", None)
-            await _send_approval_card(update.message, batch_id, batch)
+            msg = update.message or (update.callback_query and update.callback_query.message)
+            await _send_approval_card(msg, batch_id, batch)
             return
 
     lines.append("\nПрикрепить файлы?")
