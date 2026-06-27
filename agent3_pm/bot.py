@@ -485,9 +485,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("_waiting_assignee_name", None)
         val = data.replace("crt_user_", "")
         td = context.user_data.get("pending_task")
+        logger.info(f"crt_user_ callback: val={val}, pending_task={'YES' if td else 'NONE'}, "
+                    f"approval={context.user_data.get('_approval_validating')}, "
+                    f"batch={context.user_data.get('approval_batch')}, "
+                    f"complaint={context.user_data.get('_complaint_batch') is not None}")
         if td is None:
-            await _reply(update, "Сессия истекла. Начни заново.", _menu_kb())
-            return
+            # Try to recover from approval batch
+            batch_id = context.user_data.get("_approval_validating") or context.user_data.get("approval_batch")
+            if batch_id:
+                from agent3_pm.kb_watcher import get_batch
+                batch = get_batch(batch_id)
+                if batch and batch["tasks"]:
+                    idx = batch["current_idx"]
+                    td = batch["tasks"][idx].copy()
+                    context.user_data["pending_task"] = td
+                    logger.info(f"Recovered pending_task from batch {batch_id}")
+            if td is None:
+                await _reply(update, "Сессия истекла. Начни заново.", _menu_kb())
+                return
         if val == "none":
             td["assignee_name"] = None
             td["_assignee_confirmed"] = True
@@ -556,9 +571,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
         batch["locked_by"] = update.effective_user.id
-        # Clear complaint batch to avoid interference
+        # Clear complaint batch and CANCEL timer to avoid interference
         context.user_data.pop("_complaint_batch", None)
-        context.user_data.pop("_complaint_timer", None)
+        old_timer = context.user_data.pop("_complaint_timer", None)
+        if old_timer and not old_timer.done():
+            old_timer.cancel()
+        context.user_data.pop("_last_msg", None)
+        context.user_data.pop("_last_msg_ts", None)
         batch["current_idx"] = 0
         context.user_data["approval_batch"] = batch_id
         await _send_approval_card(query, batch_id, batch)
@@ -1815,9 +1834,12 @@ async def _finalize_complaint_batch(update: Update, context: ContextTypes.DEFAUL
     # Don't override active approval/creation flows
     if (context.user_data.get("_approval_validating")
             or context.user_data.get("editing_batch")
-            or context.user_data.get("_waiting_assignee_name")):
+            or context.user_data.get("_waiting_assignee_name")
+            or context.user_data.get("approval_batch")
+            or context.user_data.get("pending_task")):
         context.user_data.pop("_complaint_batch", None)
         context.user_data.pop("_complaint_timer", None)
+        logger.info("Complaint batch cancelled — active flow detected")
         return
 
     batch = context.user_data.pop("_complaint_batch", None)
