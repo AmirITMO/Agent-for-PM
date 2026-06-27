@@ -1181,7 +1181,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             upd, ctx = update, context
             async def _delayed():
                 try:
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(7)
                     await _finalize_complaint_batch(upd, ctx)
                 except asyncio.CancelledError:
                     pass
@@ -1791,7 +1791,7 @@ async def _handle_forwarded_complaint(update: Update, context: ContextTypes.DEFA
 
     async def _delayed():
         try:
-            await asyncio.sleep(5)
+            await asyncio.sleep(7)
             await _finalize_complaint_batch(upd, ctx)
         except asyncio.CancelledError:
             pass
