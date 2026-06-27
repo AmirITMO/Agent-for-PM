@@ -1824,8 +1824,10 @@ async def _finalize_complaint_batch(update: Update, context: ContextTypes.DEFAUL
     result = await analyze_complaint(full_text or "Баг (см. скриншоты)", image_paths or None)
 
     result["is_bug"] = True
-    if result.get("priority") is None or result["priority"] > 1:
-        result["priority"] = 1
+    result["priority"] = 0
+    result["_priority_confirmed"] = True
+    result["status"] = "todo"
+    result["_status_confirmed"] = True
     result["action"] = "create_task"
 
     # Баги автоматом на доску Dev
@@ -1838,15 +1840,10 @@ async def _finalize_complaint_batch(update: Update, context: ContextTypes.DEFAUL
         if dev_proj:
             result["project_name"] = dev_proj.name
             result["_project_confirmed"] = True
-            result["status"] = "todo"
-            result["_status_confirmed"] = True
 
     context.user_data["chat_mode"] = "create"
     context.user_data["pending_task"] = result
     context.user_data["pending_files"] = list(files) if files else []
-    if not result.get("_project_confirmed"):
-        result.pop("_project_confirmed", None)
-    result.pop("_status_confirmed", None)
 
     await _ask_next_missing_field(update, context)
 
