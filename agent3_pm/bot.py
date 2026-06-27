@@ -975,9 +975,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _handle_forwarded_complaint(update, context)
         return
 
-    # Save last message for complaint trigger detection (used by forwarded messages that follow)
+    # Save last message for complaint trigger detection — but don't overwrite if batch is active
     _raw = (update.message.text or "").strip()
-    if _raw:
+    if _raw and context.user_data.get("_complaint_batch") is None:
         context.user_data["_last_msg"] = _raw
         context.user_data["_last_msg_ts"] = time.time()
 
@@ -1163,13 +1163,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             return
 
-        # Regular text/photo after complaint trigger → add to batch
-        trigger = context.user_data.get("_last_msg", "")
-        trigger_ts = context.user_data.get("_last_msg_ts", 0)
-        has_trigger = (time.time() - trigger_ts < 120
-                       and len(trigger) < 15
-                       and any(t in trigger.lower() for t in _COMPLAINT_TRIGGERS))
-        if has_trigger and context.user_data.get("_complaint_batch") is not None:
+        # Active complaint batch → add text to it
+        if context.user_data.get("_complaint_batch") is not None:
             import asyncio
             batch = context.user_data["_complaint_batch"]
             batch["texts"].append(text)
