@@ -1153,33 +1153,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _reply(update, "Спрашивай по задачам или командуй: показать, перенести на этап, удалить, напомнить.")
             return
 
-        # Short complaint trigger (just "баг", "жалоба" etc.) → wait for details
+        # Short complaint trigger (just "баг", "жалоба" etc.) → start complaint batch
         low = text.lower()
         if len(text) < 15 and any(t in low for t in _COMPLAINT_TRIGGERS):
             context.user_data["_last_msg"] = text
             context.user_data["_last_msg_ts"] = time.time()
+            context.user_data["_complaint_batch"] = {
+                "caption": text, "files": [], "texts": [], "ts": time.time()
+            }
             return
 
-        # Text after a complaint trigger → create bug task from it
+        # Regular text/photo after complaint trigger → add to batch
         trigger = context.user_data.get("_last_msg", "")
         trigger_ts = context.user_data.get("_last_msg_ts", 0)
-        if (time.time() - trigger_ts < 60
-                and len(trigger) < 15
-                and any(t in trigger.lower() for t in _COMPLAINT_TRIGGERS)):
-            context.user_data.pop("_last_msg", None)
-            context.user_data.pop("_last_msg_ts", None)
-            full_text = f"{trigger}: {text}"
-            await _send_typing(update)
-            from agent3_pm.task_agent import analyze_complaint
-            result = await analyze_complaint(full_text)
-            result["is_bug"] = True
-            if result.get("priority") is None or result["priority"] > 1:
-                result["priority"] = 1
-            result["action"] = "create_task"
-            context.user_data["chat_mode"] = "create"
-            context.user_data["pending_task"] = result
-            context.user_data["pending_files"] = []
-            await _ask_next_missing_field(update, context)
+        has_trigger = (time.time() - trigger_ts < 120
+                       and len(trigger) < 15
+                       and any(t in trigger.lower() for t in _COMPLAINT_TRIGGERS))
+        if has_trigger and context.user_data.get("_complaint_batch") is not None:
+            import asyncio
+            batch = context.user_data["_complaint_batch"]
+            batch["texts"].append(text)
+            batch["ts"] = time.time()
+            # Cancel previous timer, schedule new one
+            old_task = context.user_data.get("_complaint_timer")
+            if old_task and not old_task.done():
+                old_task.cancel()
+            upd, ctx = update, context
+            async def _delayed():
+                try:
+                    await asyncio.sleep(5)
+                    await _finalize_complaint_batch(upd, ctx)
+                except asyncio.CancelledError:
+                    pass
+            context.user_data["_complaint_timer"] = asyncio.create_task(_delayed())
             return
 
         if not context.user_data.get("chat_mode"):
@@ -1785,7 +1791,7 @@ async def _handle_forwarded_complaint(update: Update, context: ContextTypes.DEFA
 
     async def _delayed():
         try:
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)
             await _finalize_complaint_batch(upd, ctx)
         except asyncio.CancelledError:
             pass
@@ -1839,6 +1845,10 @@ async def _finalize_complaint_batch(update: Update, context: ContextTypes.DEFAUL
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Forwarded message with photo/document — potential bug report
     if update.message.forward_origin:
+        await _handle_forwarded_complaint(update, context)
+        return
+    # Non-forwarded photo/doc after complaint trigger → add to batch
+    if context.user_data.get("_complaint_batch") is not None:
         await _handle_forwarded_complaint(update, context)
         return
     if not context.user_data.get("waiting_files"):
