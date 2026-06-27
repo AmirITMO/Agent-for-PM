@@ -1153,11 +1153,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _reply(update, "Спрашивай по задачам или командуй: показать, перенести на этап, удалить, напомнить.")
             return
 
-        # Short complaint triggers → silently wait for forwarded content (any mode or no mode)
+        # Short complaint trigger (just "баг", "жалоба" etc.) → wait for details
         low = text.lower()
-        if len(text) < 50 and any(t in low for t in _COMPLAINT_TRIGGERS):
+        if len(text) < 15 and any(t in low for t in _COMPLAINT_TRIGGERS):
             context.user_data["_last_msg"] = text
             context.user_data["_last_msg_ts"] = time.time()
+            return
+
+        # Text after a complaint trigger → create bug task from it
+        trigger = context.user_data.get("_last_msg", "")
+        trigger_ts = context.user_data.get("_last_msg_ts", 0)
+        if (time.time() - trigger_ts < 60
+                and len(trigger) < 15
+                and any(t in trigger.lower() for t in _COMPLAINT_TRIGGERS)):
+            context.user_data.pop("_last_msg", None)
+            context.user_data.pop("_last_msg_ts", None)
+            full_text = f"{trigger}: {text}"
+            await _send_typing(update)
+            from agent3_pm.task_agent import analyze_complaint
+            result = await analyze_complaint(full_text)
+            result["is_bug"] = True
+            if result.get("priority") is None or result["priority"] > 1:
+                result["priority"] = 1
+            result["action"] = "create_task"
+            context.user_data["chat_mode"] = "create"
+            context.user_data["pending_task"] = result
+            context.user_data["pending_files"] = []
+            await _ask_next_missing_field(update, context)
             return
 
         if not context.user_data.get("chat_mode"):
