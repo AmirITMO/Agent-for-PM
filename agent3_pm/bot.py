@@ -1838,6 +1838,8 @@ async def _finalize_complaint_batch(update: Update, context: ContextTypes.DEFAUL
         if dev_proj:
             result["project_name"] = dev_proj.name
             result["_project_confirmed"] = True
+            result["status"] = "todo"
+            result["_status_confirmed"] = True
 
     context.user_data["chat_mode"] = "create"
     context.user_data["pending_task"] = result
