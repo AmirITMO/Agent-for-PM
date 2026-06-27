@@ -689,6 +689,7 @@ async def _finalize_approval(message, context, batch_id: str, batch: dict):
     """All tasks approved — create on kanban and notify assignees."""
     from agent3_pm.kb_watcher import remove_batch
     created = 0
+    created_tasks = []
 
     async with AsyncSessionLocal() as session:
         user = await get_user_by_telegram_id(session, batch["locked_by"])
@@ -753,12 +754,17 @@ async def _finalize_approval(message, context, batch_id: str, batch: dict):
                     except Exception:
                         logger.exception(f"Failed approval notify to assignee_id={assignee_id}")
 
+            created_tasks.append((task.id, task.title))
             created += 1
 
     remove_batch(batch_id)
     context.user_data.pop("approval_batch", None)
     context.user_data.pop("editing_batch", None)
-    await message.reply_text(f"Утверждено и создано {created} задач на канбане.", reply_markup=_menu_kb())
+    lines = [f"Утверждено и создано {created} задач на канбане.\n"]
+    for t_id, t_title in created_tasks:
+        lines.append(f"• {_link_task(t_id, t_title, user.id if user else None)}")
+    await message.reply_text("\n".join(lines), parse_mode="HTML",
+                             reply_markup=_menu_kb(), disable_web_page_preview=True)
 
 
 async def repo_get_task(session, task_id):
