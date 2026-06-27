@@ -1153,9 +1153,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _reply(update, "Спрашивай по задачам или командуй: показать, перенести на этап, удалить, напомнить.")
             return
 
-        # Short complaint trigger (just "баг", "жалоба" etc.) → start complaint batch
+        # Short complaint trigger — only if no active task flow
+        _in_flow = (context.user_data.get("pending_task")
+                    or context.user_data.get("_waiting_assignee_name")
+                    or context.user_data.get("_approval_validating")
+                    or context.user_data.get("editing_batch"))
         low = text.lower()
-        if len(text) < 15 and any(t in low for t in _COMPLAINT_TRIGGERS):
+        if not _in_flow and len(text) < 15 and any(t in low for t in _COMPLAINT_TRIGGERS):
             context.user_data["_last_msg"] = text
             context.user_data["_last_msg_ts"] = time.time()
             context.user_data["_complaint_batch"] = {
@@ -1163,8 +1167,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             return
 
-        # Active complaint batch → add text to it
-        if context.user_data.get("_complaint_batch") is not None:
+        # Active complaint batch → add text to it (only if no active task flow)
+        if not _in_flow and context.user_data.get("_complaint_batch") is not None:
             import asyncio
             batch = context.user_data["_complaint_batch"]
             batch["texts"].append(text)
