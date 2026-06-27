@@ -449,28 +449,35 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Create flow: deterministic field collection ──
     elif data.startswith("crt_proj_"):
         await query.answer()
+        if context.user_data.get("pending_task") is None:
+            await _reply(update, "Сессия истекла. Начни заново.", _menu_kb())
+            return
         proj_id = int(data.replace("crt_proj_", ""))
         async with AsyncSessionLocal() as session:
             proj = await get_project_by_id(session, proj_id)
-            if proj and context.user_data.get("pending_task") is not None:
+            if proj:
                 context.user_data["pending_task"]["project_name"] = proj.name
                 context.user_data["pending_task"]["_project_confirmed"] = True
         await _ask_next_missing_field(update, context)
 
     elif data.startswith("crt_status_"):
         await query.answer()
+        if context.user_data.get("pending_task") is None:
+            await _reply(update, "Сессия истекла. Начни заново.", _menu_kb())
+            return
         status = data.replace("crt_status_", "")
-        if context.user_data.get("pending_task") is not None:
-            context.user_data["pending_task"]["status"] = status
-            context.user_data["pending_task"]["_status_confirmed"] = True
+        context.user_data["pending_task"]["status"] = status
+        context.user_data["pending_task"]["_status_confirmed"] = True
         await _ask_next_missing_field(update, context)
 
     elif data.startswith("crt_prio_"):
         await query.answer()
+        if context.user_data.get("pending_task") is None:
+            await _reply(update, "Сессия истекла. Начни заново.", _menu_kb())
+            return
         prio = int(data.replace("crt_prio_", ""))
-        if context.user_data.get("pending_task") is not None:
-            context.user_data["pending_task"]["priority"] = prio
-            context.user_data["pending_task"]["_priority_confirmed"] = True
+        context.user_data["pending_task"]["priority"] = prio
+        context.user_data["pending_task"]["_priority_confirmed"] = True
         await _ask_next_missing_field(update, context)
 
     elif data.startswith("crt_user_"):
@@ -478,18 +485,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("_waiting_assignee_name", None)
         val = data.replace("crt_user_", "")
         td = context.user_data.get("pending_task")
-        if td is not None:
-            if val == "none":
-                td["assignee_name"] = None
-                td["_assignee_confirmed"] = True
-            else:
-                uid = int(val)
-                async with AsyncSessionLocal() as session:
-                    from agent3_pm.repository import get_user_by_id as _gui
-                    u = await _gui(session, uid)
-                    if u:
-                        td["assignee_name"] = u.name
-                        td["_assignee_confirmed"] = True
+        if td is None:
+            await _reply(update, "Сессия истекла. Начни заново.", _menu_kb())
+            return
+        if val == "none":
+            td["assignee_name"] = None
+            td["_assignee_confirmed"] = True
+        else:
+            uid = int(val)
+            async with AsyncSessionLocal() as session:
+                from agent3_pm.repository import get_user_by_id as _gui
+                u = await _gui(session, uid)
+                if u:
+                    td["assignee_name"] = u.name
+                    td["_assignee_confirmed"] = True
         await _ask_next_missing_field(update, context)
 
     # Pick buttons — feed answer back to smart assistant (for GPT clarify flow)
