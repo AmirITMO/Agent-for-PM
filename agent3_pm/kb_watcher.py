@@ -1,6 +1,8 @@
 """
-Knowledge Base watcher — monitors GitHub repo for new calls/bugs,
+Knowledge Base watcher — monitors GitHub repo for new calls/bugs/tasks,
 parses tasks via GPT, sends to TOP-1 for approval before creating on kanban.
+
+Persistent state: seen files stored in DB (Settings table) to survive restarts.
 """
 import json
 import logging
@@ -18,11 +20,41 @@ KB_API = f"https://api.github.com/repos/{KB_REPO}/contents"
 KB_RAW = f"https://raw.githubusercontent.com/{KB_REPO}/main"
 
 _seen_files: dict[str, set[str]] = {}
-_seen_global: set[str] = set()  # дедупликация между папками по имени файла
+_seen_global: set[str] = set()
 
 # Pending approval batches: {batch_id: {locked_by, tasks, current_idx, source_info}}
 _approval_batches: dict[str, dict] = {}
 _batch_counter = 0
+
+_SEEN_DB_KEY = "kb_seen_files"
+
+
+async def _load_seen_from_db():
+    """Load seen files from DB to survive container restarts."""
+    global _seen_files, _seen_global
+    try:
+        async with AsyncSessionLocal() as session:
+            raw = await repo.get_setting(session, _SEEN_DB_KEY)
+            if raw:
+                data = json.loads(raw)
+                _seen_files = {k: set(v) for k, v in data.get("folders", {}).items()}
+                _seen_global = set(data.get("global", []))
+                logger.info(f"Loaded seen files from DB: {sum(len(v) for v in _seen_files.values())} entries")
+    except Exception:
+        logger.exception("Failed to load seen files from DB")
+
+
+async def _save_seen_to_db():
+    """Persist seen files to DB."""
+    try:
+        data = {
+            "folders": {k: list(v) for k, v in _seen_files.items()},
+            "global": list(_seen_global),
+        }
+        async with AsyncSessionLocal() as session:
+            await repo.set_setting(session, _SEEN_DB_KEY, json.dumps(data, ensure_ascii=False))
+    except Exception:
+        logger.exception("Failed to save seen files to DB")
 
 
 PARSE_PROMPT_CALLS = """Из текста созвона/записи извлеки ВСЕ задачи и поручения которые были упомянуты.
@@ -104,6 +136,7 @@ async def _parse_tasks_from_content(content: str, filename: str,
             ],
             temperature=0,
             max_tokens=2000,
+            response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content.strip()
         if raw.startswith("```"):
@@ -111,6 +144,11 @@ async def _parse_tasks_from_content(content: str, filename: str,
             if raw.startswith("json"):
                 raw = raw[4:]
         result = json.loads(raw)
+        if isinstance(result, dict):
+            for key in ("tasks", "bugs", "items", "data"):
+                if key in result and isinstance(result[key], list):
+                    return result[key]
+            return []
         return result if isinstance(result, list) else []
     except Exception:
         logger.exception(f"Failed to parse tasks from {filename}")
@@ -138,6 +176,14 @@ async def check_kb_updates(bot):
     global _batch_counter
     logger.info("Checking knowledge base for updates...")
 
+    # Load from DB on first run
+    if not _seen_files:
+        await _load_seen_from_db()
+
+    all_new_tasks = []
+    all_source_info = None
+    changed = False
+
     for folder in KB_FOLDERS:
         files = await _fetch_folder(folder)
         if not files:
@@ -146,6 +192,7 @@ async def check_kb_updates(bot):
         if folder not in _seen_files:
             _seen_files[folder] = {f["name"] for f in files}
             logger.info(f"KB watcher initialized {folder}: {len(_seen_files[folder])} files")
+            changed = True
             continue
 
         new_files = [f for f in files if f["name"] not in _seen_files[folder]]
@@ -154,8 +201,8 @@ async def check_kb_updates(bot):
 
         for f in new_files:
             _seen_files[folder].add(f["name"])
+            changed = True
 
-            # Дедупликация: если этот файл уже обработан из другой папки — пропускаем
             if f["name"] in _seen_global:
                 logger.info(f"Skipping duplicate file {f['name']} in {folder}")
                 continue
@@ -163,17 +210,20 @@ async def check_kb_updates(bot):
 
             filepath = f"{folder}/{f['name']}"
             content = await _fetch_file_content(filepath)
-            if not content:
+            if not content or len(content.strip()) < 20:
+                logger.info(f"Skipping empty/short file {filepath}")
                 continue
 
             source_info = _extract_source_info(content, f["name"])
+            if not all_source_info:
+                all_source_info = source_info
+
             prompt = PARSE_PROMPT_BUGS if "bugs" in folder else PARSE_PROMPT_CALLS
             tasks = await _parse_tasks_from_content(content, f["name"], prompt=prompt)
             if not tasks:
                 logger.info(f"No tasks found in {filepath}")
                 continue
 
-            # Из bugs/ — принудительно is_bug (GPT может не пометить)
             if "bugs" in folder:
                 for t in tasks:
                     t["is_bug"] = True
@@ -184,21 +234,37 @@ async def check_kb_updates(bot):
             for t in tasks:
                 t["_source_url"] = file_url
 
-            # Create approval batch
+            all_new_tasks.extend(tasks)
+            logger.info(f"Parsed {len(tasks)} tasks from {filepath}")
+
+    # Save to DB after changes
+    if changed:
+        await _save_seen_to_db()
+
+    # Merge all new tasks into ONE batch
+    if all_new_tasks:
+        # Deduplicate by title
+        seen_titles = set()
+        unique_tasks = []
+        for t in all_new_tasks:
+            title_key = t.get("title", "").lower().strip()
+            if title_key and title_key not in seen_titles:
+                seen_titles.add(title_key)
+                unique_tasks.append(t)
+
+        if unique_tasks:
             _batch_counter += 1
             batch_id = f"kb_{_batch_counter}"
             _approval_batches[batch_id] = {
                 "locked_by": None,
-                "tasks": tasks,
+                "tasks": unique_tasks,
                 "current_idx": 0,
-                "source_info": source_info,
-                "file_url": file_url,
-                "folder": folder,
+                "source_info": all_source_info or {"filename": "", "date": "", "author": "", "author_name": ""},
+                "file_url": "",
+                "folder": "mixed",
             }
-
-            # Notify TOP-1
-            await _notify_top1_new_batch(bot, batch_id, tasks, source_info)
-            logger.info(f"New batch {batch_id}: {len(tasks)} tasks from {filepath}")
+            await _notify_top1_new_batch(bot, batch_id, unique_tasks, all_source_info or {})
+            logger.info(f"New batch {batch_id}: {len(unique_tasks)} tasks (merged from all folders)")
 
 
 async def _notify_top1_new_batch(bot, batch_id: str, tasks: list[dict], source: dict):
@@ -207,10 +273,9 @@ async def _notify_top1_new_batch(bot, batch_id: str, tasks: list[dict], source: 
 
     author = source.get("author_name") or source.get("author") or "неизвестно"
     date = source.get("date") or "—"
-    filename = source.get("filename", "")
 
-    lines = [f"На созвоне {date}"]
-    lines.append(f"Загруженном сотрудником {author} были выявлены задачи:\n")
+    lines = [f"Новые задачи из базы знаний ({date})"]
+    lines.append(f"Источник: {author}\n")
     for i, t in enumerate(tasks, 1):
         bug = " [Баг]" if t.get("is_bug") else ""
         lines.append(f"{i}. {t.get('title', '—')}{bug}")
@@ -227,6 +292,7 @@ async def _notify_top1_new_batch(bot, batch_id: str, tasks: list[dict], source: 
     for user in top1:
         try:
             await bot.send_message(chat_id=user.telegram_id, text=text, reply_markup=kb)
+            logger.info(f"Notified {user.name} about batch {batch_id}")
         except Exception:
             logger.exception(f"Failed to notify {user.name} about batch {batch_id}")
 
