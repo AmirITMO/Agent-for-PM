@@ -547,6 +547,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             return
         batch["locked_by"] = update.effective_user.id
+        # Clear complaint batch to avoid interference
+        context.user_data.pop("_complaint_batch", None)
+        context.user_data.pop("_complaint_timer", None)
         batch["current_idx"] = 0
         context.user_data["approval_batch"] = batch_id
         await _send_approval_card(query, batch_id, batch)
@@ -1800,6 +1803,14 @@ async def _handle_forwarded_complaint(update: Update, context: ContextTypes.DEFA
 
 async def _finalize_complaint_batch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process batched complaint — GPT analysis → bug card → ask project/status."""
+    # Don't override active approval/creation flows
+    if (context.user_data.get("_approval_validating")
+            or context.user_data.get("editing_batch")
+            or context.user_data.get("_waiting_assignee_name")):
+        context.user_data.pop("_complaint_batch", None)
+        context.user_data.pop("_complaint_timer", None)
+        return
+
     batch = context.user_data.pop("_complaint_batch", None)
     context.user_data.pop("_complaint_timer", None)
     context.user_data.pop("_last_msg", None)
