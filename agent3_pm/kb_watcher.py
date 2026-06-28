@@ -279,9 +279,12 @@ async def _notify_top1_new_batch(bot, batch_id: str, tasks: list[dict], source: 
         [InlineKeyboardButton("Взять на утверждение", callback_data=f"approve_take_{batch_id}")]
     ])
 
+    # TODO: временно только Амир (telegram_id=1086780711) для тестов
+    _TEST_ONLY_IDS = {1086780711}
     async with AsyncSessionLocal() as session:
         all_users = await repo.get_all_users(session)
-        top1 = [u for u in all_users if u.position in LEVEL_1_POSITIONS and u.telegram_id]
+        top1 = [u for u in all_users if u.position in LEVEL_1_POSITIONS and u.telegram_id
+                and u.telegram_id in _TEST_ONLY_IDS]
 
     for user in top1:
         try:
