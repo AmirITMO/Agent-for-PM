@@ -100,6 +100,7 @@ def _can_manage(user) -> bool:
 def _task_to_dict(task) -> dict:
     return {
         "id": task.id,
+        "number": task.display_number or task.id,
         "title": task.title,
         "description": task.description,
         "status": task.status.value if hasattr(task.status, "value") else task.status,

@@ -102,6 +102,7 @@ class Task(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    display_number = Column(Integer, nullable=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     title = Column(String(500), nullable=False)
     description = Column(Text, nullable=True)

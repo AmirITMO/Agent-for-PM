@@ -36,7 +36,7 @@
             <a href="/task/{{ t.id }}?back={% if only_mine %}/my{% else %}/board?project_id={{ selected_project_id or '' }}{% endif %}" class="card" style="display:block; text-decoration:none; color:inherit;" draggable="true" data-task-id="{{ t.id }}" ondragstart="onDragStart(event)" ondragend="onDragEnd(event)">
                 {% if t.is_red %}<div class="card-priority"></div>{% endif %}
                 {% if t.assignee != '—' %}<div class="card-avatar">{{ t.assignee[:2] }}</div>{% endif %}
-                <div class="card-title"><span style="color:#888;font-weight:normal;">#{{ t.id }}</span> {{ t.title }}</div>
+                <div class="card-title"><span style="color:#888;font-weight:normal;">#{{ t.number }}</span> {{ t.title }}</div>
                 {% if t.description %}<div class="card-desc">{{ t.description }}</div>{% endif %}
                 <div class="card-meta">
                     {% if t.is_bug %}<span class="tag-bug">Баг</span>{% endif %}

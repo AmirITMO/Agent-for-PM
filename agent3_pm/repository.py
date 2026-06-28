@@ -434,11 +434,19 @@ async def create_task(session: AsyncSession, title: str, project_id: int | None 
                       assignee_id: int | None = None, creator_id: int | None = None,
                       estimated_hours: float | None = None,
                       due_date: datetime.date | None = None) -> Task:
+    # Assign cycling display_number (1-999)
+    max_result = await session.execute(
+        select(func.max(Task.display_number))
+    )
+    max_num = max_result.scalar() or 0
+    display_number = (max_num % 999) + 1
+
     task = Task(
         title=title, project_id=project_id, description=description,
         status=status, priority=priority, is_bug=is_bug,
         assignee_id=assignee_id, creator_id=creator_id,
         estimated_hours=estimated_hours, due_date=due_date,
+        display_number=display_number,
     )
     session.add(task)
     await session.commit()

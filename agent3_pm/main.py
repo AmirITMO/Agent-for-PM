@@ -31,6 +31,18 @@ async def main():
     except Exception:
         logger.debug("Settings migration skipped (already text or table missing)")
 
+    try:
+        async with get_async_engine().begin() as conn:
+            await conn.execute(__import__('sqlalchemy').text(
+                "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS display_number INTEGER"
+            ))
+            await conn.execute(__import__('sqlalchemy').text(
+                "UPDATE tasks SET display_number = ((id - 1) % 999) + 1 WHERE display_number IS NULL"
+            ))
+        logger.info("Tasks display_number column ready")
+    except Exception:
+        logger.debug("Tasks display_number migration skipped")
+
     logger.info("Starting Telegram bot...")
     bot_app = create_bot_application()
     bot = Bot(token=config.TELEGRAM_BOT_TOKEN)

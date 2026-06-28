@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}#{{ task.id }} {{ task.title }}{% endblock %}
-{% block header_title %}Задача #{{ task.id }}{% endblock %}
+{% block title %}#{{ task.display_number or task.id }} {{ task.title }}{% endblock %}
+{% block header_title %}Задача #{{ task.display_number or task.id }}{% endblock %}
 
 {% block content %}
 <div style="max-width:720px; margin:24px auto; padding:0 16px;">

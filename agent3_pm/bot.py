@@ -221,7 +221,8 @@ async def _send_team_report(update, session, asker):
             bug = "[Баг] " if t.is_bug else ""
             tok = _make_enter_token(asker.id)
             link = f'<a href="{base}/enter/{asker.id}?tok={tok}&amp;next=/task/{t.id}">открыть</a>'
-            lines.append(f"• #{t.id} {bug}{t.title} — {st} — {link}")
+            dn = t.display_number or t.id
+            lines.append(f"• #{dn} {bug}{t.title} — {st} — {link}")
         blocks.append("\n".join(lines))
 
     if not blocks:
@@ -254,7 +255,8 @@ async def _format_user_tasks(session, target, asker) -> str:
         bug = "[Баг] " if t.is_bug else ""
         tok = _make_enter_token(asker.id)
         link = f'<a href="{base}/enter/{asker.id}?tok={tok}&amp;next=/task/{t.id}">открыть</a>'
-        lines.append(f"{i}. #{t.id} {bug}{t.title} — P{t.priority} — {st} — {link}")
+        dn = t.display_number or t.id
+        lines.append(f"{i}. #{dn} {bug}{t.title} — P{t.priority} — {st} — {link}")
     return "\n".join(lines)
 
 
@@ -338,7 +340,7 @@ async def _get_context_data(session, user) -> dict:
 
     def _task_dict(t):
         return {
-            "id": t.id, "title": t.title,
+            "id": t.id, "number": t.display_number or t.id, "title": t.title,
             "status": t.status.value if hasattr(t.status, "value") else t.status,
             "priority": t.priority, "is_bug": t.is_bug,
             "due_date": t.due_date.isoformat() if t.due_date else None,
@@ -754,15 +756,15 @@ async def _finalize_approval(message, context, batch_id: str, batch: dict):
                     except Exception:
                         logger.exception(f"Failed approval notify to assignee_id={assignee_id}")
 
-            created_tasks.append((task.id, task.title))
+            created_tasks.append((task.display_number or task.id, task.id, task.title))
             created += 1
 
     remove_batch(batch_id)
     context.user_data.pop("approval_batch", None)
     context.user_data.pop("editing_batch", None)
     lines = [f"Утверждено и создано {created} задач на канбане.\n"]
-    for t_id, t_title in created_tasks:
-        lines.append(f"• #{t_id} {_link_task(t_id, t_title, user.id if user else None)}")
+    for t_num, t_id, t_title in created_tasks:
+        lines.append(f"• #{t_num} {_link_task(t_id, t_title, user.id if user else None)}")
     await message.reply_text("\n".join(lines), parse_mode="HTML",
                              reply_markup=_menu_kb(), disable_web_page_preview=True)
 
@@ -997,7 +999,8 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("waiting_files", None)
 
     uid = user.id if user else None
-    await _reply(update, f"Задача #{task.id} создана: <b>{task.title}</b>\n{_link_new_task(task.id, uid)}", _menu_kb())
+    dn = task.display_number or task.id
+    await _reply(update, f"Задача #{dn} создана: <b>{task.title}</b>\n{_link_new_task(task.id, uid)}", _menu_kb())
 
 
 # ── Main handler ──
@@ -1079,7 +1082,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines = [f"<b>Твои задачи ({len(active)}):</b>\n"]
                 for t in active:
                     p = t.project.name if t.project else "—"
-                    lines.append(f"#{t.id} {'[Баг] ' if t.is_bug else ''}P{t.priority} {t.title} ({p}) {_link_task(t.id, 'ссылка', user.id)}")
+                    dn = t.display_number or t.id
+                    lines.append(f"#{dn} {'[Баг] ' if t.is_bug else ''}P{t.priority} {t.title} ({p}) {_link_task(t.id, 'ссылка', user.id)}")
                 reply = "\n".join(lines)
             reply += f"\n\n{_link_board(user.id)}"
             await _reply(update, reply, _menu_kb())
@@ -2125,8 +2129,9 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                     due_date=due_date, status=status,
                 )
 
+                dn = task.display_number or task.id
                 await update.message.reply_text(
-                    f"Задача #{task.id} создана: {task.title}\n{_link_task(task.id, user_id=user.id)}", parse_mode="HTML")
+                    f"Задача #{dn} создана: {task.title}\n{_link_task(task.id, user_id=user.id)}", parse_mode="HTML")
 
                 if assignee_id:
                     from agent3_pm.repository import get_task_by_id
