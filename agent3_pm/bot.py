@@ -261,7 +261,7 @@ async def _format_user_tasks(session, target, asker) -> str:
 def _menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
         [KeyboardButton("Мои задачи"), KeyboardButton("Просрочки")],
-        [KeyboardButton("Задать задачу"), KeyboardButton("Спросить по задачам")],
+        [KeyboardButton("Задать задачу"), KeyboardButton("Управлять задачами")],
         [KeyboardButton("Инструкции")],
     ], resize_keyboard=True)
 
@@ -1030,7 +1030,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Waiting for assignee name input — search DB by name
     if context.user_data.get("_waiting_assignee_name") and context.user_data.get("pending_task"):
         text_input = (update.message.text or "").strip()
-        if text_input and text_input not in ("Мои задачи", "Просрочки", "Задать задачу", "Спросить по задачам", "Инструкции"):
+        if text_input and text_input not in ("Мои задачи", "Просрочки", "Задать задачу", "Управлять задачами", "Инструкции"):
             context.user_data.pop("_waiting_assignee_name", None)
             async with AsyncSessionLocal() as session:
                 all_users = await get_all_users(session)
@@ -1052,7 +1052,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Editing pending task card — ONLY in create mode
     if context.user_data.get("pending_task") and context.user_data.get("chat_mode") == "create":
         text = (update.message.text or "").strip()
-        if text and text not in ("Мои задачи", "Просрочки", "Задать задачу", "Спросить по задачам", "Инструкции"):
+        if text and text not in ("Мои задачи", "Просрочки", "Задать задачу", "Управлять задачами", "Инструкции"):
             await _send_typing(update)
             await _edit_pending_task(update, context, text)
             return
@@ -1100,7 +1100,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "- Мои задачи — список твоих активных задач со ссылками\n"
                 "- Просрочки — просроченные, горящие задачи и баги\n"
                 "- Задать задачу — создать задачу (текст, голос или пересылка)\n"
-                "- Спросить по задачам — вопросы и управление канбаном\n"
+                "- Управлять задачами — вопросы и управление канбаном\n"
                 "- Инструкции — это сообщение\n\n"
 
                 "<b>Создание задачи:</b>\n"
@@ -1183,7 +1183,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("waiting_files", None)
             await _reply(update, "Опиши задачу — текстом или голосом. Уточню доску и этап, покажу карточку.")
             return
-        if text == "Спросить по задачам":
+        if text == "Управлять задачами":
             context.user_data["chat_mode"] = "ask"
             context.user_data["chat_history"] = []
             context.user_data.pop("pending_task", None)
