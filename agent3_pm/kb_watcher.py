@@ -236,14 +236,7 @@ async def check_kb_updates(bot):
 
     # Merge all new tasks into ONE batch
     if all_new_tasks:
-        # Deduplicate by title
-        seen_titles = set()
-        unique_tasks = []
-        for t in all_new_tasks:
-            title_key = t.get("title", "").lower().strip()
-            if title_key and title_key not in seen_titles:
-                seen_titles.add(title_key)
-                unique_tasks.append(t)
+        unique_tasks = all_new_tasks
 
         if unique_tasks:
             _batch_counter += 1
