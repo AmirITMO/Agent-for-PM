@@ -39,7 +39,7 @@ _SEEN_DB_KEY = "kb_seen_files"
 
 async def _load_seen_from_db():
     """Load seen files from DB to survive container restarts."""
-    global _seen_files, _seen_global
+    global _seen_files
     try:
         async with AsyncSessionLocal() as session:
             raw = await repo.get_setting(session, _SEEN_DB_KEY)

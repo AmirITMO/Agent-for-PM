@@ -21,11 +21,15 @@ async def main():
     await init_db()
 
     # Migrate settings.value from varchar(500) to text
-    from agent3_pm.database import get_async_engine
-    async with get_async_engine().begin() as conn:
-        await conn.execute(__import__('sqlalchemy').text(
-            "ALTER TABLE settings ALTER COLUMN value TYPE text"
-        ))
+    try:
+        from agent3_pm.database import get_async_engine
+        async with get_async_engine().begin() as conn:
+            await conn.execute(__import__('sqlalchemy').text(
+                "ALTER TABLE settings ALTER COLUMN value TYPE text"
+            ))
+        logger.info("Settings column migrated to text")
+    except Exception:
+        logger.debug("Settings migration skipped (already text or table missing)")
 
     logger.info("Starting Telegram bot...")
     bot_app = create_bot_application()
