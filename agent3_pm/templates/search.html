@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Поиск: {{ q }}{% endblock %}
+{% block header_title %}Поиск{% endblock %}
+
+{% block content %}
+<div style="max-width:700px;margin:24px auto;padding:0 16px;">
+    <form action="/search" method="get" style="margin-bottom:20px;">
+        <input type="text" name="q" value="{{ q }}" placeholder="Поиск по названию..." autofocus
+               style="width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:14px;font-family:inherit;">
+    </form>
+    {% if q %}
+    <div style="font-size:13px;color:#888;margin-bottom:12px;">Найдено: {{ results|length }}</div>
+    {% for t in results %}
+    <a href="/task/{{ t.id }}" style="display:block;text-decoration:none;color:inherit;padding:10px 14px;border:1px solid #eee;border-radius:8px;margin-bottom:6px;background:#fff;transition:border-color 0.15s;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            {% if t.is_bug %}<span class="tag-bug">Баг</span>{% endif %}
+            <span class="tag-pr">P{{ t.priority }}</span>
+            <span style="font-size:13px;font-weight:500;">{{ t.title }}</span>
+            <span style="margin-left:auto;font-size:11px;color:#999;">{{ t.project }} &middot; {{ status_label.get(t.status, t.status) }}</span>
+        </div>
+    </a>
+    {% endfor %}
+    {% if not results %}<div style="color:#999;font-size:13px;">Ничего не найдено</div>{% endif %}
+    {% endif %}
+</div>
+{% endblock %}

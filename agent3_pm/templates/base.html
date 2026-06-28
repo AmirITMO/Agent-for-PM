@@ -125,6 +125,7 @@
             {% if can_manage %}<a href="/employees" class="{% if nav_active == 'employees' %}active{% endif %}">Сотрудники</a>{% endif %}
             <a href="/settings" class="{% if nav_active == 'settings' %}active{% endif %}">Настройки</a>
             <span class="nav-sep">|</span>
+            <form action="/search" method="get" style="display:inline-flex;margin:0;"><input type="text" name="q" placeholder="Поиск..." style="padding:4px 8px;border:1px solid #ddd;border-radius:5px;font-size:12px;width:130px;"></form>
             <span class="nav-user">{{ current_user.name }}</span>
             <a href="/logout">Выйти</a>
         {% endif %}

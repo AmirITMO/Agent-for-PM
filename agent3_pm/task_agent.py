@@ -123,7 +123,8 @@ WEB URL: {context_data.get('web_base_url', '')}
 - «задай задачу» / «поставь задачу» / «добавь задачу» — это ВСЕГДА create_task, НЕ set_reminder
 - «написать мише» / «позвонить клиенту» — это ЗАДАЧА (create_task), а НЕ напоминание
 - set_reminder ТОЛЬКО если пользователь явно говорит «напомни МНЕ» / «напоминание»
-- Если упомянут исполнитель по имени — ищи в списке СОТРУДНИКОВ. Имена могут быть неточными: «Амиру» = «Амир Хайруллин», «Мише» = ищи Михаила"""
+- Если упомянут исполнитель по имени — ищи в списке СОТРУДНИКОВ. Имена могут быть неточными: «Амиру» = «Амир Хайруллин», «Мише» = ищи Михаила
+- Пользователь может ссылаться на задачу по номеру: «удали задачу #12», «перенеси #5 в работу». Номер = поле id из all_tasks."""
 
 
 _MODE_CREATE = """
@@ -138,7 +139,13 @@ _MODE_ASK = """
 
 === РЕЖИМ: ВОПРОСЫ И УПРАВЛЕНИЕ ===
 Пользователь нажал кнопку «Спросить по задачам». Доступно: answer, update_task, delete_task, set_reminder.
-СОЗДАВАТЬ задачи ЗАПРЕЩЕНО (create_task нельзя). Если просят создать задачу — верни answer: «Чтобы создать задачу, нажми кнопку „Задать задачу“»."""
+СОЗДАВАТЬ задачи ЗАПРЕЩЕНО (create_task нельзя). Если просят создать задачу — верни answer: «Чтобы создать задачу, нажми кнопку „Задать задачу"»."""
+
+_MODE_GROUP = """
+
+=== РЕЖИМ: ГРУППОВОЙ ЧАТ ===
+Сообщение из группового чата. Доступны ВСЕ действия: create_task, answer, update_task, delete_task, set_reminder, clarify.
+Определи намерение пользователя по контексту сообщения."""
 
 
 async def smart_assistant(user_message: str, context_data: dict,
@@ -146,7 +153,12 @@ async def smart_assistant(user_message: str, context_data: dict,
     try:
         client = _get_client()
         system = _build_system_prompt(context_data)
-        system += _MODE_CREATE if mode == "create" else _MODE_ASK
+        if mode == "create":
+            system += _MODE_CREATE
+        elif mode == "group":
+            system += _MODE_GROUP
+        else:
+            system += _MODE_ASK
         messages = [{"role": "system", "content": system}]
         if history:
             messages.extend(history)

@@ -401,7 +401,10 @@ async def archive_old_tasks(session: AsyncSession, days: int = 90) -> int:
 async def get_all_tasks(session: AsyncSession, project_id: int | None = None,
                         status: TaskStatus | None = None,
                         assignee_id: int | None = None,
-                        include_archived: bool = False) -> list[Task]:
+                        include_archived: bool = False,
+                        priority: int | None = None,
+                        is_bug: bool | None = None,
+                        overdue: bool = False) -> list[Task]:
     q = (
         select(Task)
         .options(selectinload(Task.assignee), selectinload(Task.project), selectinload(Task.comments))
@@ -415,6 +418,12 @@ async def get_all_tasks(session: AsyncSession, project_id: int | None = None,
         q = q.where(Task.status == status)
     if assignee_id:
         q = q.where(Task.assignee_id == assignee_id)
+    if priority is not None:
+        q = q.where(Task.priority == priority)
+    if is_bug is not None:
+        q = q.where(Task.is_bug == is_bug)
+    if overdue:
+        q = q.where(Task.due_date < datetime.date.today())
     result = await session.execute(q)
     return list(result.scalars().all())
 

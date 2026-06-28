@@ -264,9 +264,30 @@ async def logout():
     return response
 
 
+# ── Search ──
+
+@app.get("/search", response_class=HTMLResponse)
+async def search_tasks(request: Request, q: str = "",
+                       session: AsyncSession = Depends(get_session)):
+    current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
+    results = []
+    if q.strip():
+        tasks = await repo.search_tasks_by_title(session, q.strip())
+        results = [_task_to_dict(t) for t in tasks]
+    nav = await _nav_context(request, session)
+    return templates.TemplateResponse(request, "search.html", {
+        **nav, "q": q, "results": results,
+        "status_label": STATUS_LABEL_MAP,
+    })
+
+
 # ── Boards (kanban) ──
 
-async def _render_board(request, session, current, project_id, only_mine):
+async def _render_board(request, session, current, project_id, only_mine,
+                        filter_assignee_id=None, filter_priority=None,
+                        filter_bugs_only=False, filter_overdue=False):
     projects = await repo.get_all_projects(session)
     users = await repo.get_all_users(session)
 
@@ -283,6 +304,14 @@ async def _render_board(request, session, current, project_id, only_mine):
             kwargs["assignee_id"] = current.id if current else -1
         else:
             kwargs["project_id"] = pid
+        if filter_assignee_id is not None:
+            kwargs["assignee_id"] = filter_assignee_id
+        if filter_priority is not None:
+            kwargs["priority"] = filter_priority
+        if filter_bugs_only:
+            kwargs["is_bug"] = True
+        if filter_overdue:
+            kwargs["overdue"] = True
         tasks = await repo.get_all_tasks(session, **kwargs)
         columns[col] = [_task_to_dict(t) for t in tasks]
 
@@ -304,17 +333,29 @@ async def _render_board(request, session, current, project_id, only_mine):
         "priorities": PRIORITY_LEVELS,
         "priority_label": PRIORITY_LABEL_MAP,
         "default_priority": DEFAULT_PRIORITY,
+        "filter_assignee_id": filter_assignee_id,
+        "filter_priority": filter_priority,
+        "filter_bugs_only": filter_bugs_only,
+        "filter_overdue": filter_overdue,
     })
 
 
 @app.get("/board", response_class=HTMLResponse)
 async def board(request: Request, project_id: str | None = None,
+                assignee_id: str | None = None, priority: str | None = None,
+                bugs_only: str | None = None, overdue: str | None = None,
                 session: AsyncSession = Depends(get_session)):
     current = await _current_user(request, session)
     if not current:
         return RedirectResponse("/")
     pid = int(project_id) if project_id and project_id.strip() else None
-    return await _render_board(request, session, current, pid, only_mine=False)
+    f_assignee = int(assignee_id) if assignee_id and assignee_id.strip() else None
+    f_priority = int(priority) if priority is not None and priority.strip() != "" else None
+    f_bugs = bugs_only == "1"
+    f_overdue = overdue == "1"
+    return await _render_board(request, session, current, pid, only_mine=False,
+                               filter_assignee_id=f_assignee, filter_priority=f_priority,
+                               filter_bugs_only=f_bugs, filter_overdue=f_overdue)
 
 
 @app.get("/my", response_class=HTMLResponse)

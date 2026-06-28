@@ -3,19 +3,40 @@
 {% block header_title %}{% if only_mine %}Мои задачи{% else %}{{ current_project.name if current_project else 'MarketAI' }}{% endif %}{% endblock %}
 
 {% block content %}
+{% if not only_mine %}
+<div style="display:flex;align-items:center;gap:8px;padding:8px 16px;background:#f7f7f7;border-bottom:1px solid #e8e8e8;flex-wrap:wrap;">
+    <form id="filterForm" method="get" action="/board" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0;">
+        <input type="hidden" name="project_id" value="{{ selected_project_id or '' }}">
+        <select name="assignee_id" style="padding:4px 8px;border:1px solid #ddd;border-radius:5px;font-size:12px;" onchange="this.form.submit()">
+            <option value="">Исполнитель</option>
+            {% for u in users %}<option value="{{ u.id }}" {% if filter_assignee_id == u.id %}selected{% endif %}>{{ u.name }}</option>{% endfor %}
+        </select>
+        <select name="priority" style="padding:4px 8px;border:1px solid #ddd;border-radius:5px;font-size:12px;" onchange="this.form.submit()">
+            <option value="">Приоритет</option>
+            {% for p in priorities %}<option value="{{ p }}" {% if filter_priority is not none and filter_priority == p %}selected{% endif %}>P{{ p }}</option>{% endfor %}
+        </select>
+        <select name="bugs_only" style="padding:4px 8px;border:1px solid #ddd;border-radius:5px;font-size:12px;" onchange="this.form.submit()">
+            <option value="">Тип</option>
+            <option value="1" {% if filter_bugs_only %}selected{% endif %}>Баги</option>
+        </select>
+        <button type="submit" name="overdue" value="{% if filter_overdue %}{% else %}1{% endif %}" class="btn btn-sm {% if filter_overdue %}btn-primary{% else %}btn-secondary{% endif %}" style="font-size:11px;">Просрочено</button>
+        <a href="/board?project_id={{ selected_project_id or '' }}" class="btn btn-sm btn-secondary" style="font-size:11px;text-decoration:none;">Сбросить</a>
+    </form>
+</div>
+{% endif %}
 <div class="kanban-wrap">
     {% for col in kanban_columns %}
-    <div class="kanban-col">
+    <div class="kanban-col" data-status="{{ col }}" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
         <div class="col-head">
             <span class="col-title">{{ status_label[col] }}</span>
-            <span class="col-count">{{ columns[col]|length }}</span>
+            <span class="col-count" id="count-{{ col }}">{{ columns[col]|length }}</span>
         </div>
-        <div class="col-body">
+        <div class="col-body" data-status="{{ col }}">
             {% for t in columns[col] %}
-            <a href="/task/{{ t.id }}?back={% if only_mine %}/my{% else %}/board?project_id={{ selected_project_id or '' }}{% endif %}" class="card" style="display:block; text-decoration:none; color:inherit;">
+            <a href="/task/{{ t.id }}?back={% if only_mine %}/my{% else %}/board?project_id={{ selected_project_id or '' }}{% endif %}" class="card" style="display:block; text-decoration:none; color:inherit;" draggable="true" data-task-id="{{ t.id }}" ondragstart="onDragStart(event)" ondragend="onDragEnd(event)">
                 {% if t.is_red %}<div class="card-priority"></div>{% endif %}
                 {% if t.assignee != '—' %}<div class="card-avatar">{{ t.assignee[:2] }}</div>{% endif %}
-                <div class="card-title">{{ t.title }}</div>
+                <div class="card-title"><span style="color:#888;font-weight:normal;">#{{ t.id }}</span> {{ t.title }}</div>
                 {% if t.description %}<div class="card-desc">{{ t.description }}</div>{% endif %}
                 <div class="card-meta">
                     {% if t.is_bug %}<span class="tag-bug">Баг</span>{% endif %}
@@ -79,5 +100,53 @@ function openAdd(pid, st) {
 document.getElementById('addModal').addEventListener('click', function(e) {
     if (e.target === this) this.classList.remove('active');
 });
+
+var draggedEl = null;
+function onDragStart(e) {
+    draggedEl = e.currentTarget;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', e.currentTarget.dataset.taskId);
+    setTimeout(function() { draggedEl.style.opacity = '0.5'; }, 0);
+}
+function onDragEnd(e) {
+    e.currentTarget.style.opacity = '';
+    draggedEl = null;
+    document.querySelectorAll('.kanban-col').forEach(function(c) { c.style.background = ''; });
+}
+function onDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    var col = e.currentTarget.closest('.kanban-col');
+    if (col) col.style.background = '#e8f4fd';
+}
+function onDragLeave(e) {
+    var col = e.currentTarget.closest('.kanban-col');
+    if (col && !col.contains(e.relatedTarget)) col.style.background = '';
+}
+function onDrop(e) {
+    e.preventDefault();
+    var col = e.currentTarget.closest('.kanban-col');
+    if (col) col.style.background = '';
+    var taskId = e.dataTransfer.getData('text/plain');
+    var newStatus = col.dataset.status;
+    if (!taskId || !newStatus || !draggedEl) return;
+    var oldCol = draggedEl.closest('.kanban-col');
+    var body = col.querySelector('.col-body');
+    body.appendChild(draggedEl);
+    draggedEl.style.opacity = '';
+    // Update counts
+    if (oldCol) {
+        var oldCount = oldCol.querySelector('.col-count');
+        if (oldCount) oldCount.textContent = oldCol.querySelector('.col-body').children.length;
+    }
+    var newCount = col.querySelector('.col-count');
+    if (newCount) newCount.textContent = body.children.length;
+
+    var fd = new FormData();
+    fd.append('status', newStatus);
+    fd.append('redirect', REDIRECT);
+    fetch('/api/tasks/' + taskId + '/status', { method: 'POST', body: fd })
+        .then(function(r) { if (!r.ok && r.status !== 303) console.error('status update failed'); });
+}
 </script>
 {% endblock %}
