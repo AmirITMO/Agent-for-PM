@@ -19,8 +19,16 @@ KB_FOLDERS = ["user/calls", "user/bugs", "calls/tasks"]
 KB_API = f"https://api.github.com/repos/{KB_REPO}/contents"
 KB_RAW = f"https://raw.githubusercontent.com/{KB_REPO}/main"
 
+import os
+_GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+
+def _gh_headers() -> dict:
+    h = {"Accept": "application/vnd.github.v3+json"}
+    if _GITHUB_TOKEN:
+        h["Authorization"] = f"token {_GITHUB_TOKEN}"
+    return h
+
 _seen_files: dict[str, set[str]] = {}
-_seen_global: set[str] = set()
 
 # Pending approval batches: {batch_id: {locked_by, tasks, current_idx, source_info}}
 _approval_batches: dict[str, dict] = {}
@@ -98,7 +106,7 @@ async def _fetch_folder(folder: str) -> list[dict]:
     try:
         async with aiohttp.ClientSession() as http:
             async with http.get(f"{KB_API}/{folder}",
-                                headers={"Accept": "application/vnd.github.v3+json"}) as resp:
+                                headers=_gh_headers()) as resp:
                 if resp.status != 200:
                     return []
                 data = await resp.json()

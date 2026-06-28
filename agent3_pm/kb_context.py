@@ -3,6 +3,7 @@ Knowledge Base RAG — downloads all .md files from GitHub repo,
 chunks them, builds embeddings index, and retrieves relevant context
 for bug analysis.
 """
+import os
 import logging
 import asyncio
 import aiohttp
@@ -55,8 +56,11 @@ def _split_text(text: str, filename: str) -> list[dict]:
 async def _fetch_tree() -> list[dict]:
     try:
         async with aiohttp.ClientSession() as http:
-            async with http.get(KB_API,
-                                headers={"Accept": "application/vnd.github.v3+json"}) as resp:
+            headers = {"Accept": "application/vnd.github.v3+json"}
+            gh_token = os.getenv("GITHUB_TOKEN", "")
+            if gh_token:
+                headers["Authorization"] = f"token {gh_token}"
+            async with http.get(KB_API, headers=headers) as resp:
                 if resp.status != 200:
                     logger.warning(f"KB tree fetch failed: {resp.status}")
                     return []
