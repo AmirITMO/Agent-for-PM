@@ -38,7 +38,6 @@ async def _load_seen_from_db():
             if raw:
                 data = json.loads(raw)
                 _seen_files = {k: set(v) for k, v in data.get("folders", {}).items()}
-                _seen_global = set(data.get("global", []))
                 logger.info(f"Loaded seen files from DB: {sum(len(v) for v in _seen_files.values())} entries")
     except Exception:
         logger.exception("Failed to load seen files from DB")
@@ -49,7 +48,6 @@ async def _save_seen_to_db():
     try:
         data = {
             "folders": {k: list(v) for k, v in _seen_files.items()},
-            "global": list(_seen_global),
         }
         async with AsyncSessionLocal() as session:
             await repo.set_setting(session, _SEEN_DB_KEY, json.dumps(data, ensure_ascii=False))
@@ -202,11 +200,6 @@ async def check_kb_updates(bot):
         for f in new_files:
             _seen_files[folder].add(f["name"])
             changed = True
-
-            if f["name"] in _seen_global:
-                logger.info(f"Skipping duplicate file {f['name']} in {folder}")
-                continue
-            _seen_global.add(f["name"])
 
             filepath = f"{folder}/{f['name']}"
             content = await _fetch_file_content(filepath)
