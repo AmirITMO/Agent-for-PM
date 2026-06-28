@@ -1,26 +1,36 @@
 """
-Knowledge Base watcher — monitors GitHub repo for new calls/bugs/tasks,
-parses tasks via GPT, sends to TOP-1 for approval before creating on kanban.
+Knowledge Base watcher — GitHub webhook triggered.
 
-Persistent state: seen files stored in DB (Settings table) to survive restarts.
+When Jarvis pushes new files to the KB repo, GitHub sends a webhook to
+/webhook/github → we parse tasks/bugs from new files → notify Level 1.
+
+No polling. Instant. Reliable.
 """
+import hashlib
+import hmac
 import json
 import logging
+import os
+
 import aiohttp
 from agent3_pm.database import AsyncSessionLocal
 from agent3_pm import repository as repo
 from agent3_pm.models import LEVEL_1_POSITIONS
 from agent3_pm.task_agent import _get_client
+from agent3_pm.config import config
 
 logger = logging.getLogger(__name__)
 
 KB_REPO = "Deci1337/mai-knowledge-base"
-KB_FOLDERS = ["user/calls", "user/bugs", "calls/tasks"]
-KB_API = f"https://api.github.com/repos/{KB_REPO}/contents"
+KB_WATCHED_FOLDERS = {"user/calls", "user/bugs", "calls/tasks"}
 KB_RAW = f"https://raw.githubusercontent.com/{KB_REPO}/main"
 
-import os
 _GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "")
+
+# TODO: временно только Амир для тестов
+_TEST_ONLY_IDS: set[int] | None = {1086780711}
+
 
 def _gh_headers() -> dict:
     h = {"Accept": "application/vnd.github.v3+json"}
@@ -28,39 +38,10 @@ def _gh_headers() -> dict:
         h["Authorization"] = f"token {_GITHUB_TOKEN}"
     return h
 
-_seen_files: dict[str, set[str]] = {}
 
-# Pending approval batches: {batch_id: {locked_by, tasks, current_idx, source_info}}
+# Pending approval batches (in memory — lost on restart, but webhooks re-trigger)
 _approval_batches: dict[str, dict] = {}
 _batch_counter = 0
-
-_SEEN_DB_KEY = "kb_seen_files"
-
-
-async def _load_seen_from_db():
-    """Load seen files from DB to survive container restarts."""
-    global _seen_files
-    try:
-        async with AsyncSessionLocal() as session:
-            raw = await repo.get_setting(session, _SEEN_DB_KEY)
-            if raw:
-                data = json.loads(raw)
-                _seen_files = {k: set(v) for k, v in data.get("folders", {}).items()}
-                logger.info(f"Loaded seen files from DB: {sum(len(v) for v in _seen_files.values())} entries")
-    except Exception:
-        logger.exception("Failed to load seen files from DB")
-
-
-async def _save_seen_to_db():
-    """Persist seen files to DB."""
-    try:
-        data = {
-            "folders": {k: list(v) for k, v in _seen_files.items()},
-        }
-        async with AsyncSessionLocal() as session:
-            await repo.set_setting(session, _SEEN_DB_KEY, json.dumps(data, ensure_ascii=False))
-    except Exception:
-        logger.exception("Failed to save seen files to DB")
 
 
 PARSE_PROMPT_CALLS = """Из текста созвона/записи извлеки ВСЕ задачи и поручения которые были упомянуты.
@@ -78,8 +59,8 @@ PARSE_PROMPT_CALLS = """Из текста созвона/записи извле
   "status": null
 }
 
-Верни массив JSON: [задача1, задача2, ...]
-Если задач нет — верни пустой массив [].
+Верни JSON объект с ключом "tasks": {"tasks": [задача1, задача2, ...]}
+Если задач нет — {"tasks": []}.
 Извлекай ТОЛЬКО конкретные задачи/поручения, не общие обсуждения.
 НЕ придумывай задач — только из текста."""
 
@@ -97,31 +78,18 @@ PARSE_PROMPT_BUGS = """Из текста извлеки ВСЕ баги и ош�
   "status": null
 }
 
-Верни массив JSON. Если багов нет — [].
+Верни JSON объект с ключом "tasks": {"tasks": [баг1, баг2, ...]}
+Если багов нет — {"tasks": []}.
 Извлекай ТОЛЬКО баги/ошибки, не обычные задачи."""
 
 
-async def _fetch_folder(folder: str) -> list[dict]:
-    """Get file list from GitHub folder."""
-    try:
-        async with aiohttp.ClientSession() as http:
-            async with http.get(f"{KB_API}/{folder}",
-                                headers=_gh_headers()) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
-                return data if isinstance(data, list) else []
-    except Exception:
-        logger.exception(f"Failed to fetch {folder}")
-        return []
-
-
 async def _fetch_file_content(path: str) -> str:
-    """Download raw file content."""
+    """Download raw file content from GitHub."""
     try:
         async with aiohttp.ClientSession() as http:
-            async with http.get(f"{KB_RAW}/{path}") as resp:
+            async with http.get(f"{KB_RAW}/{path}", headers=_gh_headers()) as resp:
                 if resp.status != 200:
+                    logger.warning(f"Failed to fetch {path}: {resp.status}")
                     return ""
                 return await resp.text()
     except Exception:
@@ -145,10 +113,6 @@ async def _parse_tasks_from_content(content: str, filename: str,
             response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
         result = json.loads(raw)
         if isinstance(result, dict):
             for key in ("tasks", "bugs", "items", "data"):
@@ -177,92 +141,111 @@ def _extract_source_info(content: str, filename: str) -> dict:
     return info
 
 
-async def check_kb_updates(bot):
-    """Main watcher: check for new files, parse tasks, notify TOP-1."""
+def verify_github_signature(payload: bytes, signature: str) -> bool:
+    """Verify GitHub webhook signature (HMAC-SHA256)."""
+    if not _WEBHOOK_SECRET:
+        return True  # no secret configured — accept all (dev mode)
+    expected = "sha256=" + hmac.new(
+        _WEBHOOK_SECRET.encode(), payload, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+async def handle_webhook_push(payload: dict, bot) -> dict:
+    """Process GitHub push webhook — extract new files from watched folders,
+    parse tasks/bugs, notify Level 1.
+
+    Returns summary dict for HTTP response.
+    """
     global _batch_counter
-    logger.info("Checking knowledge base for updates...")
 
-    # Load from DB on first run
-    if not _seen_files:
-        await _load_seen_from_db()
+    commits = payload.get("commits", [])
+    if not commits:
+        return {"status": "no_commits"}
 
-    all_new_tasks = []
-    all_source_info = None
-    changed = False
+    # Collect all new/modified files from watched folders
+    new_files: list[dict] = []  # [{"path": ..., "folder": ...}]
+    seen_paths = set()
 
-    for folder in KB_FOLDERS:
-        files = await _fetch_folder(folder)
-        if not files:
-            continue
+    for commit in commits:
+        for filepath in commit.get("added", []) + commit.get("modified", []):
+            if filepath in seen_paths:
+                continue
+            seen_paths.add(filepath)
 
-        if folder not in _seen_files:
-            _seen_files[folder] = {f["name"] for f in files}
-            logger.info(f"KB watcher initialized {folder}: {len(_seen_files[folder])} files")
-            changed = True
-            continue
+            parts = filepath.rsplit("/", 1)
+            if len(parts) != 2:
+                continue
+            folder, filename = parts
 
-        new_files = [f for f in files if f["name"] not in _seen_files[folder]]
-        if not new_files:
-            continue
-
-        for f in new_files:
-            _seen_files[folder].add(f["name"])
-            changed = True
-
-            filepath = f"{folder}/{f['name']}"
-            content = await _fetch_file_content(filepath)
-            if not content or len(content.strip()) < 20:
-                logger.info(f"Skipping empty/short file {filepath}")
+            if folder not in KB_WATCHED_FOLDERS:
+                continue
+            if filename.startswith("."):
                 continue
 
-            source_info = _extract_source_info(content, f["name"])
-            if not all_source_info:
-                all_source_info = source_info
+            new_files.append({"path": filepath, "folder": folder, "filename": filename})
 
-            prompt = PARSE_PROMPT_BUGS if "bugs" in folder else PARSE_PROMPT_CALLS
-            tasks = await _parse_tasks_from_content(content, f["name"], prompt=prompt)
-            if not tasks:
-                logger.info(f"No tasks found in {filepath}")
-                continue
+    if not new_files:
+        return {"status": "no_watched_files"}
 
-            if "bugs" in folder:
-                for t in tasks:
-                    t["is_bug"] = True
-                    if t.get("priority", 2) > 1:
-                        t["priority"] = 1
+    logger.info(f"Webhook: {len(new_files)} new files in watched folders")
 
-            file_url = f"https://github.com/{KB_REPO}/blob/main/{filepath}"
+    # Parse each file
+    all_tasks = []
+    source_info = None
+
+    for f in new_files:
+        content = await _fetch_file_content(f["path"])
+        if not content or len(content.strip()) < 20:
+            logger.info(f"Skipping empty/short file {f['path']}")
+            continue
+
+        info = _extract_source_info(content, f["filename"])
+        if not source_info:
+            source_info = info
+
+        prompt = PARSE_PROMPT_BUGS if "bugs" in f["folder"] else PARSE_PROMPT_CALLS
+        tasks = await _parse_tasks_from_content(content, f["filename"], prompt)
+        if not tasks:
+            logger.info(f"No tasks found in {f['path']}")
+            continue
+
+        if "bugs" in f["folder"]:
             for t in tasks:
-                t["_source_url"] = file_url
+                t["is_bug"] = True
+                if t.get("priority", 2) > 1:
+                    t["priority"] = 1
 
-            all_new_tasks.extend(tasks)
-            logger.info(f"Parsed {len(tasks)} tasks from {filepath}")
+        file_url = f"https://github.com/{KB_REPO}/blob/main/{f['path']}"
+        for t in tasks:
+            t["_source_url"] = file_url
 
-    # Save to DB after changes
-    if changed:
-        await _save_seen_to_db()
+        all_tasks.extend(tasks)
+        logger.info(f"Parsed {len(tasks)} tasks from {f['path']}")
 
-    # Merge all new tasks into ONE batch
-    if all_new_tasks:
-        unique_tasks = all_new_tasks
+    if not all_tasks:
+        return {"status": "no_tasks_found", "files_checked": len(new_files)}
 
-        if unique_tasks:
-            _batch_counter += 1
-            batch_id = f"kb_{_batch_counter}"
-            _approval_batches[batch_id] = {
-                "locked_by": None,
-                "tasks": unique_tasks,
-                "current_idx": 0,
-                "source_info": all_source_info or {"filename": "", "date": "", "author": "", "author_name": ""},
-                "file_url": "",
-                "folder": "mixed",
-            }
-            await _notify_top1_new_batch(bot, batch_id, unique_tasks, all_source_info or {})
-            logger.info(f"New batch {batch_id}: {len(unique_tasks)} tasks (merged from all folders)")
+    # Create batch and notify
+    _batch_counter += 1
+    batch_id = f"kb_{_batch_counter}"
+    _approval_batches[batch_id] = {
+        "locked_by": None,
+        "tasks": all_tasks,
+        "current_idx": 0,
+        "source_info": source_info or {"filename": "", "date": "", "author": "", "author_name": ""},
+        "file_url": "",
+        "folder": "webhook",
+    }
+
+    await _notify_top1_new_batch(bot, batch_id, all_tasks, source_info or {})
+    logger.info(f"Webhook batch {batch_id}: {len(all_tasks)} tasks from {len(new_files)} files")
+
+    return {"status": "ok", "batch_id": batch_id, "tasks_count": len(all_tasks)}
 
 
 async def _notify_top1_new_batch(bot, batch_id: str, tasks: list[dict], source: dict):
-    """Send notification to all TOP-1 users about new tasks batch."""
+    """Send notification to Level 1 users about new tasks batch."""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     author = source.get("author_name") or source.get("author") or "неизвестно"
@@ -279,12 +262,11 @@ async def _notify_top1_new_batch(bot, batch_id: str, tasks: list[dict], source: 
         [InlineKeyboardButton("Взять на утверждение", callback_data=f"approve_take_{batch_id}")]
     ])
 
-    # TODO: временно только Амир (telegram_id=1086780711) для тестов
-    _TEST_ONLY_IDS = {1086780711}
     async with AsyncSessionLocal() as session:
         all_users = await repo.get_all_users(session)
-        top1 = [u for u in all_users if u.position in LEVEL_1_POSITIONS and u.telegram_id
-                and u.telegram_id in _TEST_ONLY_IDS]
+        top1 = [u for u in all_users if u.position in LEVEL_1_POSITIONS and u.telegram_id]
+        if _TEST_ONLY_IDS is not None:
+            top1 = [u for u in top1 if u.telegram_id in _TEST_ONLY_IDS]
 
     for user in top1:
         try:

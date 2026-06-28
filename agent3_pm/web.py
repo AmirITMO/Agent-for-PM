@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 import time
@@ -737,3 +738,30 @@ async def update_settings_api(request: Request, session: AsyncSession = Depends(
         if val is not None:
             await repo.set_setting(session, key, str(val).strip())
     return RedirectResponse("/settings", status_code=303)
+
+
+# ── GitHub Webhook ──
+
+@app.post("/webhook/github")
+async def github_webhook(request: Request):
+    """Receive GitHub push events and process new KB files."""
+    from agent3_pm.kb_watcher import verify_github_signature, handle_webhook_push
+
+    body = await request.body()
+
+    sig = request.headers.get("X-Hub-Signature-256", "")
+    if not verify_github_signature(body, sig):
+        raise HTTPException(403, "Invalid signature")
+
+    event = request.headers.get("X-GitHub-Event", "")
+    if event == "ping":
+        return {"status": "pong"}
+    if event != "push":
+        return {"status": "ignored", "event": event}
+
+    payload = json.loads(body)
+
+    from telegram import Bot
+    bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+    result = await handle_webhook_push(payload, bot)
+    return result
