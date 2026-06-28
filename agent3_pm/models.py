@@ -197,7 +197,7 @@ class Settings(Base):
     __tablename__ = "settings"
 
     key = Column(String(100), primary_key=True)
-    value = Column(String(500), nullable=False)
+    value = Column(Text, nullable=False)
 
     DEFAULTS = {
         "morning_summary_hour": "9",
