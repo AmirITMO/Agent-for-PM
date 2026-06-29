@@ -572,7 +572,22 @@ async def update_task_api(task_id: int, request: Request,
     updater_name = current.name
     task_after = await repo.get_task_by_id(session, task_id)
     if task_after:
-        await _notify_task_updated(session, task_after, updater_id, updater_name, old_assignee_id)
+        # Собрать описание изменений
+        changes = []
+        if task_before and task_before.status != task_after.status:
+            old_s = STATUS_LABEL_MAP.get(task_before.status.value if hasattr(task_before.status, "value") else task_before.status, "")
+            new_s = STATUS_LABEL_MAP.get(task_after.status.value if hasattr(task_after.status, "value") else task_after.status, "")
+            changes.append(f"Статус: {old_s} → {new_s}")
+        if old_assignee_id != task_after.assignee_id:
+            old_name = task_before.assignee.name if task_before and task_before.assignee else "не назначен"
+            new_name = task_after.assignee.name if task_after.assignee else "не назначен"
+            changes.append(f"Исполнитель: {old_name} → {new_name}")
+        if task_before and task_before.priority != task_after.priority:
+            changes.append(f"Приоритет: P{task_before.priority} → P{task_after.priority}")
+        if task_before and task_before.title != task_after.title:
+            changes.append(f"Название изменено")
+        change_desc = "\n".join(changes) if changes else "Задача обновлена"
+        await _notify_task_updated_with_details(session, task_after, updater_id, updater_name, old_assignee_id, change_desc)
 
     return RedirectResponse(redirect, status_code=303)
 
@@ -589,9 +604,15 @@ async def update_task_status_api(task_id: int, request: Request,
     if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
         redirect = "/board"
     new_status = TaskStatus(status)
+    task_before = await repo.get_task_by_id(session, task_id)
+    old_status = task_before.status if task_before else None
     task = await repo.update_task_status(session, task_id, new_status)
     if task and new_status == TaskStatus.DONE:
         await _notify_managers_done(session, task)
+    if task and task.assignee and task.assignee_id != current.id:
+        old_label = STATUS_LABEL_MAP.get(old_status.value if hasattr(old_status, "value") else old_status, "")
+        new_label = STATUS_LABEL_MAP.get(new_status.value, "")
+        await _notify_task_change(session, task, current.name, f"Статус: {old_label} → {new_label}")
     return RedirectResponse(redirect, status_code=303)
 
 
@@ -605,9 +626,13 @@ async def mark_done_api(task_id: int, request: Request,
     redirect = form.get("redirect", "/board")
     if not redirect or not redirect.startswith("/") or redirect.startswith("//"):
         redirect = "/board"
+    task_before = await repo.get_task_by_id(session, task_id)
+    old_label = STATUS_LABEL_MAP.get(task_before.status.value if task_before and hasattr(task_before.status, "value") else "", "") if task_before else ""
     task = await repo.update_task_status(session, task_id, TaskStatus.DONE)
     if task:
         await _notify_managers_done(session, task)
+        if task.assignee and task.assignee_id != current.id:
+            await _notify_task_change(session, task, current.name, f"Статус: {old_label} → Готово")
     return RedirectResponse(redirect, status_code=303)
 
 
@@ -686,6 +711,45 @@ def _abs_url_simple(path: str) -> str:
     return f"{config.WEB_BASE_URL.rstrip('/')}{path}"
 
 
+async def _notify_task_updated_with_details(session, task, updater_id: int | None,
+                                            updater_name: str, old_assignee_id: int | None,
+                                            change_desc: str):
+    """Notify assignee about task update with details of what changed."""
+    try:
+        if not config.TELEGRAM_BOT_TOKEN:
+            return
+        from telegram import Bot
+        bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        notified = set()
+        dn = task.display_number or task.id
+        assignee_changed = old_assignee_id is not None and old_assignee_id != task.assignee_id
+
+        if task.assignee and task.assignee.telegram_id and task.assignee_id != updater_id:
+            if assignee_changed:
+                text = (f"Тебе назначена задача #{dn} от {updater_name}\n\n"
+                        f"<b>{task.title}</b>\n{change_desc}\n\n"
+                        f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
+            else:
+                text = (f"Изменение по задаче #{dn} от {updater_name}\n\n"
+                        f"<b>{task.title}</b>\n{change_desc}\n\n"
+                        f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
+            await bot.send_message(chat_id=task.assignee.telegram_id, text=text,
+                                   parse_mode="HTML", disable_web_page_preview=True)
+            notified.add(task.assignee_id)
+
+        if assignee_changed and old_assignee_id and old_assignee_id not in notified:
+            old_user = await repo.get_user_by_id(session, old_assignee_id)
+            if old_user and old_user.telegram_id and old_user.id != updater_id:
+                text = (f"Задача #{dn} переназначена пользователем {updater_name}\n\n"
+                        f"<b>{task.title}</b>\n{change_desc}\n\n"
+                        f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
+                await bot.send_message(chat_id=old_user.telegram_id, text=text,
+                                       parse_mode="HTML", disable_web_page_preview=True)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("notify update with details failed")
+
+
 async def _notify_task_updated(session, task, updater_id: int | None,
                                updater_name: str, old_assignee_id: int | None = None):
     """Notify assignee when their task is updated by someone else."""
@@ -725,6 +789,25 @@ async def _notify_task_updated(session, task, updater_id: int | None,
     except Exception:
         import logging
         logging.getLogger(__name__).exception("notify update failed")
+
+
+async def _notify_task_change(session, task, updater_name: str, change_desc: str):
+    """Notify assignee about specific change to their task."""
+    try:
+        if not task.assignee or not task.assignee.telegram_id or not config.TELEGRAM_BOT_TOKEN:
+            return
+        from telegram import Bot
+        bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        dn = task.display_number or task.id
+        text = (f"Изменение по задаче #{dn} от {updater_name}\n\n"
+                f"<b>{task.title}</b>\n"
+                f"{change_desc}\n\n"
+                f'<a href="{_abs_url_simple(f"/task/{task.id}")}">Открыть задачу</a>')
+        await bot.send_message(chat_id=task.assignee.telegram_id, text=text,
+                               parse_mode="HTML", disable_web_page_preview=True)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("notify task change failed")
 
 
 async def _notify_assignee(session, task, creator_name: str | None = None):
