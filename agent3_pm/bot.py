@@ -2091,72 +2091,12 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                 _group_sessions[key]["active"] = False
 
             elif action == "create_task":
-                try:
-                    td = result
-                    assignee_id = None
-                    if td.get("assignee_name"):
-                        users = await get_all_users(session)
-                        match = _fuzzy_match_user(td["assignee_name"], users)
-                        if match:
-                            assignee_id = match.id
-
-                    project_id = None
-                    if td.get("project_name"):
-                        proj = await get_project_by_name(session, td["project_name"])
-                        if proj:
-                            project_id = proj.id
-
-                    import datetime as dt
-                    due_date = None
-                    if td.get("due_date"):
-                        try:
-                            due_date = dt.date.fromisoformat(str(td["due_date"])[:10])
-                        except (ValueError, TypeError):
-                            pass
-
-                    prio = 2
-                    try:
-                        prio = int(td.get("priority", 2))
-                    except (ValueError, TypeError):
-                        pass
-
-                    status = TaskStatus.BACKLOG
-                    if td.get("status"):
-                        try:
-                            status = TaskStatus(td["status"])
-                        except ValueError:
-                            pass
-
-                    task = await create_task(
-                        session, title=td.get("title", "Без названия"),
-                        description=td.get("description"), project_id=project_id,
-                        priority=prio,
-                        is_bug=bool(td.get("is_bug", False)),
-                        assignee_id=assignee_id, creator_id=user.id,
-                        due_date=due_date, status=status,
-                    )
-
-                    dn = task.display_number or task.id
-                    await update.message.reply_text(
-                        f"Задача #{dn} создана: {task.title}\n{_link_task(task.id, user_id=user.id)}", parse_mode="HTML")
-                except Exception:
-                    logger.exception("Group create_task failed")
-                    await update.message.reply_text("Не удалось создать задачу. Попробуй в личке бота.")
-
-                if assignee_id:
-                    from agent3_pm.repository import get_task_by_id
-                    task = await get_task_by_id(session, task.id)
-                    if task and task.assignee and task.assignee.telegram_id:
-                        from telegram import Bot
-                        try:
-                            bot_inst = Bot(token=config.TELEGRAM_BOT_TOKEN)
-                            notify = (f"Тебе назначена задача от {user.name}\n\n"
-                                      f"{task.title}\nP{task.priority}\n{_link_task(task.id, user_id=task.assignee.id)}")
-                            await bot_inst.send_message(chat_id=task.assignee.telegram_id, text=notify, parse_mode="HTML")
-                        except Exception:
-                            logger.exception(f"Failed to notify assignee in group for task '{task.title}'")
-
-                _group_sessions[key]["active"] = False
+                if result.get("priority") is None:
+                    result["priority"] = DEFAULT_PRIORITY
+                context.user_data["chat_mode"] = "create"
+                context.user_data["pending_task"] = result
+                context.user_data["pending_files"] = []
+                await _ask_next_missing_field(update, context)
 
             elif action == "update_task":
                 await update.message.reply_text("Управление задачами в группе — используй личку бота.")
