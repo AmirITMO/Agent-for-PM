@@ -86,7 +86,7 @@ WEB URL: {context_data.get('web_base_url', '')}
 НЕ вычисляй следующий статус сам — система сделает это автоматически.
 Порядок этапов: backlog → planning → todo → wip → done → approved → hold
 
-«Отметь выполненной» = status: "done"
+«Отметь выполненной» / «закрой задачу» / «закрой #5» = status: "done"
 
 4. УДАЛИТЬ задачу(и):
 {{"action": "delete_task", "task_id": число}}  — одна задача
