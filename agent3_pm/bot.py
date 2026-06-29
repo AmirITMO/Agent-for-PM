@@ -998,6 +998,11 @@ async def _execute_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("pending_files", None)
     context.user_data.pop("waiting_files", None)
 
+    # Close group session if task was created from group chat
+    group_key = context.user_data.pop("_group_create_key", None)
+    if group_key and group_key in _group_sessions:
+        _group_sessions[group_key]["active"] = False
+
     uid = user.id if user else None
     dn = task.display_number or task.id
     await _reply(update, f"Задача #{dn} создана: <b>{task.title}</b>\n{_link_new_task(task.id, uid)}", _menu_kb())
@@ -2096,6 +2101,7 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                 context.user_data["chat_mode"] = "create"
                 context.user_data["pending_task"] = result
                 context.user_data["pending_files"] = []
+                context.user_data["_group_create_key"] = key
                 await _ask_next_missing_field(update, context)
 
             elif action == "update_task":
@@ -2117,10 +2123,30 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                             changes["project_id"] = proj.id
                         del changes["project_name"]
                     if "status" in changes:
-                        try:
-                            changes["status"] = TaskStatus(changes["status"])
-                        except ValueError:
-                            del changes["status"]
+                        from agent3_pm.repository import get_task_by_id as _gt
+                        current_task = await _gt(session, task_id)
+                        STATUS_ORDER = [
+                            TaskStatus.BACKLOG, TaskStatus.PLANNING, TaskStatus.TODO,
+                            TaskStatus.WIP, TaskStatus.DONE, TaskStatus.APPROVED, TaskStatus.HOLD,
+                        ]
+                        raw_status = changes["status"]
+                        if raw_status in ("next", "следующий"):
+                            if current_task and current_task.status in STATUS_ORDER:
+                                idx = STATUS_ORDER.index(current_task.status)
+                                changes["status"] = STATUS_ORDER[min(idx + 1, len(STATUS_ORDER) - 1)]
+                            else:
+                                del changes["status"]
+                        elif raw_status in ("prev", "previous", "предыдущий"):
+                            if current_task and current_task.status in STATUS_ORDER:
+                                idx = STATUS_ORDER.index(current_task.status)
+                                changes["status"] = STATUS_ORDER[max(idx - 1, 0)]
+                            else:
+                                del changes["status"]
+                        else:
+                            try:
+                                changes["status"] = TaskStatus(raw_status)
+                            except ValueError:
+                                del changes["status"]
                     await update_task(session, task_id, **changes)
                     from agent3_pm.repository import get_task_by_id
                     task = await get_task_by_id(session, task_id)
