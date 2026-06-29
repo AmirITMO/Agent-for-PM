@@ -619,10 +619,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             remove_batch(batch_id)
             context.user_data.pop("approval_batch", None)
             await query.message.reply_text("Все задачи удалены из пакета.", reply_markup=_menu_kb())
+        elif batch["current_idx"] >= len(batch["tasks"]):
+            # Удалили последнюю — финализируем оставшиеся
+            await _finalize_approval(query.message, context, batch_id, batch)
         else:
-            if batch["current_idx"] >= len(batch["tasks"]):
-                batch["current_idx"] = len(batch["tasks"]) - 1
-            # Отправляем новое сообщение (старое уже отредактировано в «Удалена»)
             await _send_approval_card(query.message, batch_id, batch)
 
     elif data.startswith("approve_edit_"):
