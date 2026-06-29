@@ -153,7 +153,7 @@ async def _fetch_file_content(path: str) -> str:
 
 
 async def _parse_tasks_from_content(content: str, filename: str,
-                                    prompt: str = PARSE_PROMPT_CALLS) -> list[dict]:
+                                    prompt: str = "") -> list[dict]:
     """Use GPT to extract tasks from file content."""
     try:
         client = _get_client()
