@@ -31,7 +31,7 @@ _GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 _WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "")
 
 # TODO: временно только Амир для тестов
-_TEST_ONLY_IDS: set[int] | None = {1086780711}
+_TEST_ONLY_IDS: set[int] | None = None
 
 _DB_KEY_TIMESTAMP = "kb_last_check"
 _DB_KEY_SEEN_SHAS = "kb_seen_shas"
