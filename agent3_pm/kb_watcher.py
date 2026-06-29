@@ -1,16 +1,16 @@
 """
-Knowledge Base watcher — GitHub webhook triggered.
+Knowledge Base watcher — polls GitHub commits API every 30 seconds.
 
-When Jarvis pushes new files to the KB repo, GitHub sends a webhook to
-/webhook/github → we parse tasks/bugs from new files → notify Level 1.
-
-No polling. Instant. Reliable.
+Tracks last processed commit timestamp + SHA set to avoid duplicates.
+Timestamp updated ONLY after successful processing of ALL files.
+Also supports webhook as alternative trigger (/webhook/github).
 """
 import hashlib
 import hmac
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 from agent3_pm.database import AsyncSessionLocal
@@ -24,12 +24,20 @@ logger = logging.getLogger(__name__)
 KB_REPO = "Deci1337/mai-knowledge-base"
 KB_WATCHED_FOLDERS = {"user/calls", "user/bugs", "calls/tasks"}
 KB_RAW = f"https://raw.githubusercontent.com/{KB_REPO}/main"
+KB_COMMITS_API = f"https://api.github.com/repos/{KB_REPO}/commits"
 
 _GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 _WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "")
 
 # TODO: временно только Амир для тестов
 _TEST_ONLY_IDS: set[int] | None = {1086780711}
+
+_DB_KEY_TIMESTAMP = "kb_last_check"
+_DB_KEY_SEEN_SHAS = "kb_seen_shas"
+
+_last_check: str | None = None  # ISO timestamp
+_seen_shas: set[str] = set()
+_loaded = False
 
 
 def _gh_headers() -> dict:
@@ -39,7 +47,7 @@ def _gh_headers() -> dict:
     return h
 
 
-# Pending approval batches (in memory — lost on restart, but webhooks re-trigger)
+# Pending approval batches
 _approval_batches: dict[str, dict] = {}
 _batch_counter = 0
 
@@ -83,6 +91,37 @@ PARSE_PROMPT_BUGS = """Из текста извлеки ВСЕ баги и ош�
 Извлекай ТОЛЬКО баги/ошибки, не обычные задачи."""
 
 
+async def _load_state():
+    """Load timestamp and seen SHAs from DB."""
+    global _last_check, _seen_shas, _loaded
+    if _loaded:
+        return
+    try:
+        async with AsyncSessionLocal() as session:
+            _last_check = await repo.get_setting(session, _DB_KEY_TIMESTAMP) or None
+            raw_shas = await repo.get_setting(session, _DB_KEY_SEEN_SHAS)
+            if raw_shas:
+                _seen_shas = set(json.loads(raw_shas))
+        _loaded = True
+        logger.info(f"KB watcher loaded: last_check={_last_check}, seen_shas={len(_seen_shas)}")
+    except Exception:
+        logger.exception("Failed to load KB watcher state")
+        _loaded = True
+
+
+async def _save_state():
+    """Persist timestamp and seen SHAs to DB."""
+    try:
+        async with AsyncSessionLocal() as session:
+            if _last_check:
+                await repo.set_setting(session, _DB_KEY_TIMESTAMP, _last_check)
+            # Keep only last 200 SHAs to prevent unbounded growth
+            trimmed = list(_seen_shas)[-200:]
+            await repo.set_setting(session, _DB_KEY_SEEN_SHAS, json.dumps(trimmed))
+    except Exception:
+        logger.exception("Failed to save KB watcher state")
+
+
 async def _fetch_file_content(path: str) -> str:
     """Download raw file content from GitHub."""
     try:
@@ -122,11 +161,10 @@ async def _parse_tasks_from_content(content: str, filename: str,
         return result if isinstance(result, list) else []
     except Exception:
         logger.exception(f"Failed to parse tasks from {filename}")
-        return []
+        return None  # None = error, [] = no tasks found
 
 
 def _extract_source_info(content: str, filename: str) -> dict:
-    """Extract metadata from file frontmatter."""
     info = {"filename": filename, "date": "", "author": "", "author_name": ""}
     for line in content.split("\n")[:15]:
         line = line.strip()
@@ -141,37 +179,76 @@ def _extract_source_info(content: str, filename: str) -> dict:
     return info
 
 
-def verify_github_signature(payload: bytes, signature: str) -> bool:
-    """Verify GitHub webhook signature (HMAC-SHA256)."""
-    if not _WEBHOOK_SECRET:
-        return True  # no secret configured — accept all (dev mode)
-    expected = "sha256=" + hmac.new(
-        _WEBHOOK_SECRET.encode(), payload, hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+async def check_kb_updates(bot):
+    """Poll GitHub commits API for new files in watched folders."""
+    global _last_check, _batch_counter
 
+    await _load_state()
 
-async def handle_webhook_push(payload: dict, bot) -> dict:
-    """Process GitHub push webhook — extract new files from watched folders,
-    parse tasks/bugs, notify Level 1.
+    # First run: start checking from 1 hour ago
+    if not _last_check:
+        _last_check = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        await _save_state()
+        logger.info(f"KB watcher first run, starting from {_last_check}")
+        return
 
-    Returns summary dict for HTTP response.
-    """
-    global _batch_counter
+    # Query commits since last check (with 2 sec overlap for safety)
+    try:
+        check_dt = datetime.fromisoformat(_last_check.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        check_dt = datetime.now(timezone.utc) - timedelta(hours=1)
+    since = (check_dt - timedelta(seconds=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    commits = payload.get("commits", [])
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.get(
+                KB_COMMITS_API,
+                headers=_gh_headers(),
+                params={"since": since, "per_page": 100},
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning(f"KB commits API returned {resp.status}")
+                    return
+                commits = await resp.json()
+    except Exception:
+        logger.exception("Failed to fetch KB commits")
+        return
+
     if not commits:
-        return {"status": "no_commits"}
+        return
 
-    # Collect all new/modified files from watched folders
-    new_files: list[dict] = []  # [{"path": ..., "folder": ...}]
+    # Extract new files from unseen commits
+    new_files: list[dict] = []
     seen_paths = set()
+    latest_commit_date = _last_check
 
     for commit in commits:
-        for filepath in commit.get("added", []) + commit.get("modified", []):
+        sha = commit.get("sha", "")
+        if sha in _seen_shas:
+            continue
+
+        commit_date = commit.get("commit", {}).get("committer", {}).get("date", "")
+        if commit_date > latest_commit_date:
+            latest_commit_date = commit_date
+
+        # Fetch commit details to get file list
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.get(
+                    f"https://api.github.com/repos/{KB_REPO}/commits/{sha}",
+                    headers=_gh_headers(),
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    detail = await resp.json()
+        except Exception:
+            logger.exception(f"Failed to fetch commit {sha[:8]}")
+            continue
+
+        for f in detail.get("files", []):
+            filepath = f.get("filename", "")
             if filepath in seen_paths:
                 continue
-            seen_paths.add(filepath)
 
             parts = filepath.rsplit("/", 1)
             if len(parts) != 2:
@@ -182,22 +259,33 @@ async def handle_webhook_push(payload: dict, bot) -> dict:
                 continue
             if filename.startswith("."):
                 continue
+            if f.get("status") not in ("added", "modified"):
+                continue
 
-            new_files.append({"path": filepath, "folder": folder, "filename": filename})
+            seen_paths.add(filepath)
+            new_files.append({"path": filepath, "folder": folder, "filename": filename, "sha": sha})
 
     if not new_files:
-        return {"status": "no_watched_files"}
+        # No new files but mark commits as seen
+        for commit in commits:
+            _seen_shas.add(commit.get("sha", ""))
+        _last_check = latest_commit_date
+        await _save_state()
+        return
 
-    logger.info(f"Webhook: {len(new_files)} new files in watched folders")
+    logger.info(f"KB watcher: {len(new_files)} new files from {len(commits)} commits")
 
-    # Parse each file
+    # Parse files
     all_tasks = []
     source_info = None
+    gpt_failed = False
+    processed_shas = set()
 
     for f in new_files:
         content = await _fetch_file_content(f["path"])
         if not content or len(content.strip()) < 20:
             logger.info(f"Skipping empty/short file {f['path']}")
+            processed_shas.add(f["sha"])
             continue
 
         info = _extract_source_info(content, f["filename"])
@@ -206,8 +294,16 @@ async def handle_webhook_push(payload: dict, bot) -> dict:
 
         prompt = PARSE_PROMPT_BUGS if "bugs" in f["folder"] else PARSE_PROMPT_CALLS
         tasks = await _parse_tasks_from_content(content, f["filename"], prompt)
+
+        if tasks is None:
+            # GPT error — don't mark this commit as seen, retry next scan
+            gpt_failed = True
+            logger.warning(f"GPT failed for {f['path']} — will retry next scan")
+            continue
+
         if not tasks:
             logger.info(f"No tasks found in {f['path']}")
+            processed_shas.add(f["sha"])
             continue
 
         if "bugs" in f["folder"]:
@@ -221,12 +317,97 @@ async def handle_webhook_push(payload: dict, bot) -> dict:
             t["_source_url"] = file_url
 
         all_tasks.extend(tasks)
+        processed_shas.add(f["sha"])
         logger.info(f"Parsed {len(tasks)} tasks from {f['path']}")
 
-    if not all_tasks:
-        return {"status": "no_tasks_found", "files_checked": len(new_files)}
+    # Update state — only mark successfully processed commits
+    for sha in processed_shas:
+        _seen_shas.add(sha)
+    if not gpt_failed:
+        _last_check = latest_commit_date
+    await _save_state()
 
     # Create batch and notify
+    if all_tasks:
+        _batch_counter += 1
+        batch_id = f"kb_{_batch_counter}"
+        _approval_batches[batch_id] = {
+            "locked_by": None,
+            "tasks": all_tasks,
+            "current_idx": 0,
+            "source_info": source_info or {"filename": "", "date": "", "author": "", "author_name": ""},
+            "file_url": "",
+            "folder": "polling",
+        }
+        await _notify_top1_new_batch(bot, batch_id, all_tasks, source_info or {})
+        logger.info(f"KB batch {batch_id}: {len(all_tasks)} tasks")
+
+
+# ── Webhook (alternative trigger) ──
+
+def verify_github_signature(payload: bytes, signature: str) -> bool:
+    if not _WEBHOOK_SECRET:
+        return True
+    expected = "sha256=" + hmac.new(
+        _WEBHOOK_SECRET.encode(), payload, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+async def handle_webhook_push(payload: dict, bot) -> dict:
+    """Process GitHub push webhook — same logic as polling but triggered instantly."""
+    global _batch_counter
+
+    commits = payload.get("commits", [])
+    if not commits:
+        return {"status": "no_commits"}
+
+    new_files: list[dict] = []
+    seen_paths = set()
+
+    for commit in commits:
+        for filepath in commit.get("added", []) + commit.get("modified", []):
+            if filepath in seen_paths:
+                continue
+            seen_paths.add(filepath)
+            parts = filepath.rsplit("/", 1)
+            if len(parts) != 2:
+                continue
+            folder, filename = parts
+            if folder not in KB_WATCHED_FOLDERS or filename.startswith("."):
+                continue
+            new_files.append({"path": filepath, "folder": folder, "filename": filename})
+
+    if not new_files:
+        return {"status": "no_watched_files"}
+
+    all_tasks = []
+    source_info = None
+
+    for f in new_files:
+        content = await _fetch_file_content(f["path"])
+        if not content or len(content.strip()) < 20:
+            continue
+        info = _extract_source_info(content, f["filename"])
+        if not source_info:
+            source_info = info
+        prompt = PARSE_PROMPT_BUGS if "bugs" in f["folder"] else PARSE_PROMPT_CALLS
+        tasks = await _parse_tasks_from_content(content, f["filename"], prompt)
+        if not tasks:
+            continue
+        if "bugs" in f["folder"]:
+            for t in tasks:
+                t["is_bug"] = True
+                if t.get("priority", 2) > 1:
+                    t["priority"] = 1
+        file_url = f"https://github.com/{KB_REPO}/blob/main/{f['path']}"
+        for t in tasks:
+            t["_source_url"] = file_url
+        all_tasks.extend(tasks)
+
+    if not all_tasks:
+        return {"status": "no_tasks_found"}
+
     _batch_counter += 1
     batch_id = f"kb_{_batch_counter}"
     _approval_batches[batch_id] = {
@@ -237,15 +418,11 @@ async def handle_webhook_push(payload: dict, bot) -> dict:
         "file_url": "",
         "folder": "webhook",
     }
-
     await _notify_top1_new_batch(bot, batch_id, all_tasks, source_info or {})
-    logger.info(f"Webhook batch {batch_id}: {len(all_tasks)} tasks from {len(new_files)} files")
-
     return {"status": "ok", "batch_id": batch_id, "tasks_count": len(all_tasks)}
 
 
 async def _notify_top1_new_batch(bot, batch_id: str, tasks: list[dict], source: dict):
-    """Send notification to Level 1 users about new tasks batch."""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     author = source.get("author_name") or source.get("author") or "неизвестно"

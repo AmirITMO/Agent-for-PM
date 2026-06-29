@@ -257,7 +257,16 @@ def create_scheduler(bot: Bot) -> AsyncIOScheduler:
             replace_existing=True,
         )
 
-    # KB watcher: polling removed — now uses GitHub webhook (/webhook/github)
+    from agent3_pm.kb_watcher import check_kb_updates
+    scheduler.add_job(
+        check_kb_updates,
+        trigger=IntervalTrigger(seconds=30),
+        args=[bot],
+        id="kb_watcher",
+        name="Knowledge Base Watcher",
+        replace_existing=True,
+        max_instances=1,
+    )
 
     scheduler.add_job(
         archive_tasks,
