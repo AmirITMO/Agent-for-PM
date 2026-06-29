@@ -885,6 +885,25 @@ async def update_settings_api(request: Request, session: AsyncSession = Depends(
         val = form.get(key)
         if val is not None:
             await repo.set_setting(session, key, str(val).strip())
+
+    # Apply to scheduler immediately
+    try:
+        from agent3_pm.bot import _get_scheduler
+        scheduler = _get_scheduler()
+        if scheduler:
+            from zoneinfo import ZoneInfo
+            from apscheduler.triggers.cron import CronTrigger
+            settings = await repo.get_all_settings(session)
+            stz = ZoneInfo(settings.get("timezone", "Europe/Moscow"))
+            m_h = int(settings.get("morning_summary_hour", "9"))
+            m_m = int(settings.get("morning_summary_minute", "0"))
+            e_h = int(settings.get("evening_summary_hour", "19"))
+            e_m = int(settings.get("evening_summary_minute", "0"))
+            scheduler.reschedule_job("morning_summary", trigger=CronTrigger(hour=m_h, minute=m_m, timezone=stz))
+            scheduler.reschedule_job("evening_summary", trigger=CronTrigger(hour=e_h, minute=e_m, timezone=stz))
+    except Exception:
+        pass
+
     return RedirectResponse("/settings", status_code=303)
 
 
