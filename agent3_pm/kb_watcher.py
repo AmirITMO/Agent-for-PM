@@ -154,11 +154,13 @@ async def _parse_tasks_from_content(content: str, filename: str,
             response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content.strip()
+        logger.info(f"GPT response for {filename}: {raw[:300]}")
         result = json.loads(raw)
         if isinstance(result, dict):
             for key in ("tasks", "bugs", "items", "data"):
                 if key in result and isinstance(result[key], list):
                     return result[key]
+            logger.warning(f"GPT returned dict without tasks key: {list(result.keys())}")
             return []
         return result if isinstance(result, list) else []
     except Exception:
