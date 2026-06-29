@@ -124,9 +124,11 @@ async def _save_state():
 
 async def _fetch_file_content(path: str) -> str:
     """Download raw file content from GitHub."""
+    from urllib.parse import quote
     try:
+        encoded_path = quote(path, safe="/")
         async with aiohttp.ClientSession() as http:
-            async with http.get(f"{KB_RAW}/{path}", headers=_gh_headers()) as resp:
+            async with http.get(f"{KB_RAW}/{encoded_path}", headers=_gh_headers()) as resp:
                 if resp.status != 200:
                     logger.warning(f"Failed to fetch {path}: {resp.status}")
                     return ""
