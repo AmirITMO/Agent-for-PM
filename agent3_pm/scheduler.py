@@ -294,14 +294,17 @@ async def send_evening_summary(bot: Bot):
         all_users = await repo.get_all_users(session)
         managers = await repo.get_managers(session)
 
-        # Collect all completed today and all active across all users
         all_completed = []
         all_in_work = []
+        all_done_earlier = []
+        today_start = datetime.datetime.combine(today, datetime.time.min)
+        completed_ids = set()
 
         for u in sorted(all_users, key=lambda x: x.name):
             completed = await repo.get_tasks_completed_today(session, user_id=u.id)
             for t in completed:
                 dn = t.display_number or t.id
+                completed_ids.add(t.id)
                 all_completed.append(f"  {u.name} — #{dn} {t.title} — {_enter_link(u.id, f'/task/{t.id}', 'открыть')}")
 
             tasks = await repo.get_all_tasks(session, assignee_id=u.id)
@@ -310,6 +313,14 @@ async def send_evening_summary(bot: Bot):
                 dn = t.display_number or t.id
                 sl = STATUS_LABELS.get(t.status, str(t.status))
                 all_in_work.append(f"  {u.name} — #{dn} {t.title} — {sl} — P{t.priority} — {_enter_link(u.id, f'/task/{t.id}', 'открыть')}")
+
+            done_old = [t for t in tasks if not t.archived_at
+                        and t.status in (TaskStatus.DONE, TaskStatus.APPROVED)
+                        and t.id not in completed_ids]
+            for t in done_old:
+                dn = t.display_number or t.id
+                proj = t.project.name if t.project else "—"
+                all_done_earlier.append(f"  {u.name} — #{dn} {t.title} — {proj} — {_enter_link(u.id, f'/task/{t.id}', 'открыть')}")
 
         blocks = [f"<b>Вечерняя сводка — {today.strftime('%d.%m.%Y')}</b>"]
 
@@ -324,6 +335,10 @@ async def send_evening_summary(bot: Bot):
             blocks.append("\n".join(all_in_work))
         else:
             blocks.append("\n<b>Сейчас в работе:</b>\n  Нет активных задач.")
+
+        if all_done_earlier:
+            blocks.append(f"\n<b>Выполненные ранее ({len(all_done_earlier)}):</b>")
+            blocks.append("\n".join(all_done_earlier))
 
         # Send to managers — split by Telegram limit
         for manager in managers:
