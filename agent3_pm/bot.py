@@ -2091,47 +2091,57 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                 _group_sessions[key]["active"] = False
 
             elif action == "create_task":
-                td = result
-                assignee_id = None
-                if td.get("assignee_name"):
-                    users = await get_all_users(session)
-                    match = _fuzzy_match_user(td["assignee_name"], users)
-                    if match:
-                        assignee_id = match.id
+                try:
+                    td = result
+                    assignee_id = None
+                    if td.get("assignee_name"):
+                        users = await get_all_users(session)
+                        match = _fuzzy_match_user(td["assignee_name"], users)
+                        if match:
+                            assignee_id = match.id
 
-                project_id = None
-                if td.get("project_name"):
-                    proj = await get_project_by_name(session, td["project_name"])
-                    if proj:
-                        project_id = proj.id
+                    project_id = None
+                    if td.get("project_name"):
+                        proj = await get_project_by_name(session, td["project_name"])
+                        if proj:
+                            project_id = proj.id
 
-                import datetime as dt
-                due_date = None
-                if td.get("due_date"):
+                    import datetime as dt
+                    due_date = None
+                    if td.get("due_date"):
+                        try:
+                            due_date = dt.date.fromisoformat(str(td["due_date"])[:10])
+                        except (ValueError, TypeError):
+                            pass
+
+                    prio = 2
                     try:
-                        due_date = dt.date.fromisoformat(str(td["due_date"])[:10])
+                        prio = int(td.get("priority", 2))
                     except (ValueError, TypeError):
                         pass
 
-                status = TaskStatus.BACKLOG
-                if td.get("status"):
-                    try:
-                        status = TaskStatus(td["status"])
-                    except ValueError:
-                        pass
+                    status = TaskStatus.BACKLOG
+                    if td.get("status"):
+                        try:
+                            status = TaskStatus(td["status"])
+                        except ValueError:
+                            pass
 
-                task = await create_task(
-                    session, title=td.get("title", "Без названия"),
-                    description=td.get("description"), project_id=project_id,
-                    priority=int(td.get("priority", 2)),
-                    is_bug=bool(td.get("is_bug", False)),
-                    assignee_id=assignee_id, creator_id=user.id,
-                    due_date=due_date, status=status,
-                )
+                    task = await create_task(
+                        session, title=td.get("title", "Без названия"),
+                        description=td.get("description"), project_id=project_id,
+                        priority=prio,
+                        is_bug=bool(td.get("is_bug", False)),
+                        assignee_id=assignee_id, creator_id=user.id,
+                        due_date=due_date, status=status,
+                    )
 
-                dn = task.display_number or task.id
-                await update.message.reply_text(
-                    f"Задача #{dn} создана: {task.title}\n{_link_task(task.id, user_id=user.id)}", parse_mode="HTML")
+                    dn = task.display_number or task.id
+                    await update.message.reply_text(
+                        f"Задача #{dn} создана: {task.title}\n{_link_task(task.id, user_id=user.id)}", parse_mode="HTML")
+                except Exception:
+                    logger.exception("Group create_task failed")
+                    await update.message.reply_text("Не удалось создать задачу. Попробуй в личке бота.")
 
                 if assignee_id:
                     from agent3_pm.repository import get_task_by_id
@@ -2193,10 +2203,10 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                 await update.message.reply_text("Готово.")
                 _group_sessions[key]["active"] = False
 
-    except Exception:
-        logger.exception("Error in group smart processing")
+    except Exception as exc:
+        logger.exception(f"Error in group smart processing: {exc}")
         try:
-            await update.message.reply_text("Ошибка обработки. Попробуй ещё раз.")
+            await update.message.reply_text(f"Ошибка: {str(exc)[:200]}\nПопробуй ещё раз.")
         except Exception:
             logger.exception("Failed to send error message in group chat")
 
