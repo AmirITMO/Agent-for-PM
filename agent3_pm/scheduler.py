@@ -294,46 +294,36 @@ async def send_evening_summary(bot: Bot):
         all_users = await repo.get_all_users(session)
         managers = await repo.get_managers(session)
 
-        blocks = [f"<b>Вечерняя сводка — {today.strftime('%d.%m.%Y')}</b>\n"]
+        # Collect all completed today and all active across all users
+        all_completed = []
+        all_in_work = []
 
         for u in sorted(all_users, key=lambda x: x.name):
             completed = await repo.get_tasks_completed_today(session, user_id=u.id)
-            all_tasks = await repo.get_all_tasks(session, assignee_id=u.id)
-            active = [t for t in all_tasks if not t.archived_at and t.status in ACTIVE_STATUSES]
+            for t in completed:
+                dn = t.display_number or t.id
+                all_completed.append(f"  {u.name} — #{dn} {t.title} — {_enter_link(u.id, f'/task/{t.id}', 'открыть')}")
 
-            if not completed and not active:
-                continue
+            tasks = await repo.get_all_tasks(session, assignee_id=u.id)
+            active = [t for t in tasks if not t.archived_at and t.status in ACTIVE_STATUSES]
+            for t in active:
+                dn = t.display_number or t.id
+                sl = STATUS_LABELS.get(t.status, str(t.status))
+                all_in_work.append(f"  {u.name} — #{dn} {t.title} — {sl} — P{t.priority} — {_enter_link(u.id, f'/task/{t.id}', 'открыть')}")
 
-            lines = [f"\n<b>{u.name}</b> ({u.position or '—'})"]
+        blocks = [f"<b>Вечерняя сводка — {today.strftime('%d.%m.%Y')}</b>"]
 
-            if completed:
-                lines.append(f"  <b>Выполнено сегодня ({len(completed)}):</b>")
-                for t in completed:
-                    dn = t.display_number or t.id
-                    lines.append(f"    #{dn} {t.title}")
+        if all_completed:
+            blocks.append(f"\n<b>Что сделано сегодня ({len(all_completed)}):</b>")
+            blocks.append("\n".join(all_completed))
+        else:
+            blocks.append("\n<b>Что сделано сегодня:</b>\n  Нет выполненных задач за сегодня.")
 
-            wip = [t for t in active if t.status == TaskStatus.WIP]
-            if wip:
-                lines.append(f"  <b>В работе ({len(wip)}):</b>")
-                for t in wip:
-                    dn = t.display_number or t.id
-                    dd = f" — до {t.due_date.strftime('%d.%m')}" if t.due_date else ""
-                    lines.append(f"    #{dn} {t.title}{dd}")
-
-            todo = [t for t in active if t.status in (TaskStatus.TODO, TaskStatus.BACKLOG, TaskStatus.PLANNING)]
-            if todo:
-                lines.append(f"  <b>Ожидает ({len(todo)}):</b>")
-                for t in todo:
-                    dn = t.display_number or t.id
-                    lines.append(f"    #{dn} {t.title}")
-
-            if not completed and not wip and not todo:
-                lines.append("  Нет активности за сегодня")
-
-            blocks.append("\n".join(lines))
-
-        if len(blocks) <= 1:
-            blocks.append("\nНет данных по сотрудникам.")
+        if all_in_work:
+            blocks.append(f"\n<b>Сейчас в работе ({len(all_in_work)}):</b>")
+            blocks.append("\n".join(all_in_work))
+        else:
+            blocks.append("\n<b>Сейчас в работе:</b>\n  Нет активных задач.")
 
         # Send to managers — split by Telegram limit
         for manager in managers:
