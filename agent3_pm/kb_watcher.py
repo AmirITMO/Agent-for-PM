@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -36,7 +37,7 @@ _DB_KEY_TIMESTAMP = "kb_last_check"
 _DB_KEY_SEEN_SHAS = "kb_seen_shas"
 
 _last_check: str | None = None  # ISO timestamp
-_seen_shas: set[str] = set()
+_seen_shas: list[str] = []
 _loaded = False
 
 
@@ -49,7 +50,6 @@ def _gh_headers() -> dict:
 
 # Pending approval batches
 _approval_batches: dict[str, dict] = {}
-_batch_counter = 0
 
 
 PARSE_PROMPT_CALLS = """Из текста созвона/записи извлеки ВСЕ задачи и поручения которые были упомянуты.
@@ -101,7 +101,7 @@ async def _load_state():
             _last_check = await repo.get_setting(session, _DB_KEY_TIMESTAMP) or None
             raw_shas = await repo.get_setting(session, _DB_KEY_SEEN_SHAS)
             if raw_shas:
-                _seen_shas = set(json.loads(raw_shas))
+                _seen_shas = list(json.loads(raw_shas))
         _loaded = True
         logger.info(f"KB watcher loaded: last_check={_last_check}, seen_shas={len(_seen_shas)}")
     except Exception:
@@ -116,7 +116,7 @@ async def _save_state():
             if _last_check:
                 await repo.set_setting(session, _DB_KEY_TIMESTAMP, _last_check)
             # Keep only last 200 SHAs to prevent unbounded growth
-            trimmed = list(_seen_shas)[-200:]
+            trimmed = _seen_shas[-200:]
             await repo.set_setting(session, _DB_KEY_SEEN_SHAS, json.dumps(trimmed))
     except Exception:
         logger.exception("Failed to save KB watcher state")
@@ -181,7 +181,7 @@ def _extract_source_info(content: str, filename: str) -> dict:
 
 async def check_kb_updates(bot):
     """Poll GitHub commits API for new files in watched folders."""
-    global _last_check, _batch_counter
+    global _last_check
 
     await _load_state()
 
@@ -268,7 +268,7 @@ async def check_kb_updates(bot):
     if not new_files:
         # No new files but mark commits as seen
         for commit in commits:
-            _seen_shas.add(commit.get("sha", ""))
+            _seen_shas.append(commit.get("sha", ""))
         _last_check = latest_commit_date
         await _save_state()
         return
@@ -322,15 +322,14 @@ async def check_kb_updates(bot):
 
     # Update state — only mark successfully processed commits
     for sha in processed_shas:
-        _seen_shas.add(sha)
+        _seen_shas.append(sha)
     if not gpt_failed:
         _last_check = latest_commit_date
     await _save_state()
 
     # Create batch and notify
     if all_tasks:
-        _batch_counter += 1
-        batch_id = f"kb_{_batch_counter}"
+        batch_id = f"kb_{uuid.uuid4().hex[:8]}"
         _approval_batches[batch_id] = {
             "locked_by": None,
             "tasks": all_tasks,
@@ -356,8 +355,6 @@ def verify_github_signature(payload: bytes, signature: str) -> bool:
 
 async def handle_webhook_push(payload: dict, bot) -> dict:
     """Process GitHub push webhook — same logic as polling but triggered instantly."""
-    global _batch_counter
-
     commits = payload.get("commits", [])
     if not commits:
         return {"status": "no_commits"}
@@ -408,8 +405,7 @@ async def handle_webhook_push(payload: dict, bot) -> dict:
     if not all_tasks:
         return {"status": "no_tasks_found"}
 
-    _batch_counter += 1
-    batch_id = f"kb_{_batch_counter}"
+    batch_id = f"kb_{uuid.uuid4().hex[:8]}"
     _approval_batches[batch_id] = {
         "locked_by": None,
         "tasks": all_tasks,

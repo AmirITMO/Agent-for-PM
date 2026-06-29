@@ -1015,6 +1015,8 @@ _COMPLAINT_TRIGGERS = ("баг", "bug", "жалоба", "ошибка", "сло�
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     # Forwarded text message — potential bug report
     if update.message.forward_origin:
         await _handle_forwarded_complaint(update, context)
@@ -1190,12 +1192,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("pending_task", None)
             context.user_data.pop("pending_files", None)
             context.user_data.pop("waiting_files", None)
+            context.user_data.pop("_waiting_assignee_name", None)
+            context.user_data.pop("_group_create_key", None)
+            context.user_data.pop("_approval_validating", None)
+            old_timer = context.user_data.pop("_complaint_timer", None)
+            if old_timer and not old_timer.done():
+                old_timer.cancel()
+            context.user_data.pop("_complaint_batch", None)
             await _reply(update, "Опиши задачу — текстом или голосом. Уточню доску и этап, покажу карточку.")
             return
         if text == "Управлять задачами":
             context.user_data["chat_mode"] = "ask"
             context.user_data["chat_history"] = []
             context.user_data.pop("pending_task", None)
+            context.user_data.pop("_waiting_assignee_name", None)
+            context.user_data.pop("_group_create_key", None)
+            context.user_data.pop("_approval_validating", None)
+            old_timer = context.user_data.pop("_complaint_timer", None)
+            if old_timer and not old_timer.done():
+                old_timer.cancel()
+            context.user_data.pop("_complaint_batch", None)
             await _reply(update, "Спрашивай по задачам или командуй: показать, перенести на этап, удалить, напомнить.")
             return
 
@@ -1242,6 +1258,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     async with AsyncSessionLocal() as session:
         user = await get_user_by_telegram_id(session, update.effective_user.id)
     if not user or not user.is_active:
@@ -1753,7 +1771,8 @@ async def _process_smart(update, context, text, session, user):
                               replace_existing=False)
         else:
             import asyncio
-            asyncio.get_event_loop().call_later(delay * 60,
+            loop = asyncio.get_running_loop()
+            loop.call_later(delay * 60,
                 lambda: asyncio.ensure_future(_send_reminder()))
         await _reply(update, f"Напомню через {delay} мин.")
 
@@ -1911,6 +1930,8 @@ async def _finalize_complaint_batch(update: Update, context: ContextTypes.DEFAUL
 
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     # Forwarded message with photo/document — potential bug report
     if update.message.forward_origin:
         await _handle_forwarded_complaint(update, context)
@@ -2214,7 +2235,8 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                                       replace_existing=False)
                 else:
                     import asyncio
-                    asyncio.get_event_loop().call_later(delay * 60,
+                    loop = asyncio.get_running_loop()
+                    loop.call_later(delay * 60,
                         lambda: asyncio.ensure_future(_send_group_reminder()))
                 await update.message.reply_text(f"Напомню через {delay} мин.")
                 _group_sessions[key]["active"] = False

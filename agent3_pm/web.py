@@ -150,8 +150,8 @@ def _verify_enter_token(user_id: int, tok: str) -> bool:
 
 
 def _set_auth_cookies(response, user_id: int):
-    response.set_cookie("uid", str(user_id), max_age=86400 * 30)
-    response.set_cookie("auth", _make_token(user_id), max_age=86400 * 30)
+    response.set_cookie("uid", str(user_id), max_age=86400 * 30, httponly=True, samesite="Lax")
+    response.set_cookie("auth", _make_token(user_id), max_age=86400 * 30, httponly=True, samesite="Lax")
 
 
 def _hash_password(password: str) -> str:
@@ -464,12 +464,14 @@ async def reset_password_api(user_id: int, request: Request,
 async def task_detail(request: Request, task_id: int, back: str | None = None,
                       session: AsyncSession = Depends(get_session)):
     current = await _current_user(request, session)
+    if not current:
+        return RedirectResponse("/login", status_code=303)
     task = await repo.get_task_by_id(session, task_id)
     if not task:
         raise HTTPException(404, "Задача не найдена")
     users = await repo.get_all_users(session)
     projects = await repo.get_all_projects(session)
-    back_url = back if back else "/board"
+    back_url = back if back and back.startswith("/") and not back.startswith("//") else "/board"
     return templates.TemplateResponse(request, "task_detail.html", {
         "task": task,
         "users": users,
