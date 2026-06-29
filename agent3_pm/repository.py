@@ -384,14 +384,21 @@ async def get_team_summary(session: AsyncSession) -> dict:
     hot = await get_tasks_due_today(session)
 
     open_result = await session.execute(
-        select(func.count(Task.id)).where(Task.status.in_([s.value for s in ACTIVE_STATUSES]))
+        select(func.count(Task.id)).where(
+            Task.status.in_([s.value for s in ACTIVE_STATUSES]),
+            Task.archived_at == None,  # noqa: E711
+        )
     )
     open_count = open_result.scalar() or 0
 
     by_user_result = await session.execute(
         select(User.name, func.count(Task.id))
         .join(Task, Task.assignee_id == User.id)
-        .where(Task.status.in_([s.value for s in ACTIVE_STATUSES]))
+        .where(
+            Task.status.in_([s.value for s in ACTIVE_STATUSES]),
+            Task.archived_at == None,  # noqa: E711
+            User.is_active == True,  # noqa: E712
+        )
         .group_by(User.name)
         .order_by(func.count(Task.id).desc())
     )
