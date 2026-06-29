@@ -2099,7 +2099,65 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                 await _ask_next_missing_field(update, context)
 
             elif action == "update_task":
-                await update.message.reply_text("Управление задачами в группе — используй личку бота.")
+                task_id = result.get("task_id")
+                changes = result.get("changes", {})
+                active_ids = {t["id"] for t in ctx_data.get("all_tasks", [])}
+                if not task_id or task_id not in active_ids:
+                    await update.message.reply_text("Задача не найдена на канбане.")
+                else:
+                    if "assignee_name" in changes:
+                        users = await get_all_users(session)
+                        match = _fuzzy_match_user(changes["assignee_name"], users)
+                        if match:
+                            changes["assignee_id"] = match.id
+                        del changes["assignee_name"]
+                    if "project_name" in changes:
+                        proj = await get_project_by_name(session, changes["project_name"])
+                        if proj:
+                            changes["project_id"] = proj.id
+                        del changes["project_name"]
+                    if "status" in changes:
+                        try:
+                            changes["status"] = TaskStatus(changes["status"])
+                        except ValueError:
+                            del changes["status"]
+                    await update_task(session, task_id, **changes)
+                    from agent3_pm.repository import get_task_by_id
+                    task = await get_task_by_id(session, task_id)
+                    if task:
+                        dn = task.display_number or task.id
+                        await update.message.reply_text(
+                            f"Обновлено: #{dn} {task.title}\n{_link_task(task.id, user_id=user.id)}",
+                            parse_mode="HTML", disable_web_page_preview=True)
+                _group_sessions[key]["active"] = False
+
+            elif action == "delete_task":
+                task_id = result.get("task_id")
+                active_ids = {t["id"] for t in ctx_data.get("all_tasks", [])}
+                if task_id and task_id in active_ids:
+                    from agent3_pm.repository import get_task_by_id, delete_task as del_task
+                    task = await get_task_by_id(session, task_id)
+                    if task:
+                        title = task.title
+                        dn = task.display_number or task.id
+                        await del_task(session, task_id)
+                        await update.message.reply_text(f"Задача #{dn} удалена: {title}")
+                    else:
+                        await update.message.reply_text("Задача не найдена.")
+                else:
+                    await update.message.reply_text("Задача не найдена на канбане.")
+                _group_sessions[key]["active"] = False
+
+            elif action == "delete_tasks":
+                active_ids = {t["id"] for t in ctx_data.get("all_tasks", [])}
+                ids = [i for i in (result.get("task_ids") or []) if i in active_ids]
+                if ids:
+                    from agent3_pm.repository import delete_task as del_task
+                    for tid in ids:
+                        await del_task(session, tid)
+                    await update.message.reply_text(f"Удалено задач: {len(ids)}")
+                else:
+                    await update.message.reply_text("Задачи не найдены.")
                 _group_sessions[key]["active"] = False
 
             elif action == "set_reminder":
@@ -2133,10 +2191,6 @@ async def _process_group_smart(update: Update, context: ContextTypes.DEFAULT_TYP
                     asyncio.get_event_loop().call_later(delay * 60,
                         lambda: asyncio.ensure_future(_send_group_reminder()))
                 await update.message.reply_text(f"Напомню через {delay} мин.")
-                _group_sessions[key]["active"] = False
-
-            elif action == "delete_task":
-                await update.message.reply_text("Удаление задач — используй личку бота.")
                 _group_sessions[key]["active"] = False
 
             else:
