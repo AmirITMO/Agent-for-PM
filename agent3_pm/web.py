@@ -267,21 +267,23 @@ async def logout():
 
 # ── Search ──
 
-@app.get("/search", response_class=HTMLResponse)
-async def search_tasks(request: Request, q: str = "",
-                       session: AsyncSession = Depends(get_session)):
+@app.get("/api/search")
+async def search_tasks_api(request: Request, q: str = "",
+                           session: AsyncSession = Depends(get_session)):
     current = await _current_user(request, session)
     if not current:
-        return RedirectResponse("/login", status_code=303)
-    results = []
-    if q.strip():
-        tasks = await repo.search_tasks_by_title(session, q.strip())
-        results = [_task_to_dict(t) for t in tasks]
-    nav = await _nav_context(request, session)
-    return templates.TemplateResponse(request, "search.html", {
-        **nav, "q": q, "results": results,
-        "status_label": STATUS_LABEL_MAP,
-    })
+        return {"results": []}
+    if not q.strip() or len(q.strip()) < 2:
+        return {"results": []}
+    tasks = await repo.search_tasks_by_title(session, q.strip())
+    return {"results": [
+        {"id": t.id, "number": t.display_number or t.id, "title": t.title,
+         "status": STATUS_LABEL_MAP.get(t.status.value if hasattr(t.status, "value") else t.status, ""),
+         "priority": t.priority, "is_bug": t.is_bug,
+         "assignee": t.assignee.name if t.assignee else "—",
+         "project": t.project.name if t.project else "—"}
+        for t in tasks
+    ]}
 
 
 # ── Boards (kanban) ──

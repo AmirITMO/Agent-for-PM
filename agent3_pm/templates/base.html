@@ -125,7 +125,11 @@
             {% if can_manage %}<a href="/employees" class="{% if nav_active == 'employees' %}active{% endif %}">Сотрудники</a>{% endif %}
             <a href="/settings" class="{% if nav_active == 'settings' %}active{% endif %}">Настройки</a>
             <span class="nav-sep">|</span>
-            <form action="/search" method="get" style="display:inline-flex;margin:0;"><input type="text" name="q" placeholder="Поиск..." style="padding:4px 8px;border:1px solid #ddd;border-radius:5px;font-size:12px;width:130px;"></form>
+            <div style="position:relative;display:inline-block;">
+                <input type="text" id="searchInput" placeholder="Поиск..." autocomplete="off"
+                       style="padding:4px 8px;border:1px solid #ddd;border-radius:5px;font-size:12px;width:180px;">
+                <div id="searchResults" style="display:none;position:absolute;top:100%;left:0;right:0;width:360px;max-height:400px;overflow-y:auto;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.12);z-index:200;margin-top:4px;"></div>
+            </div>
             <span class="nav-user">{{ current_user.name }}</span>
             <a href="/logout">Выйти</a>
         {% endif %}
@@ -133,5 +137,47 @@
     </div>
     {% block content %}{% endblock %}
     {% block scripts %}{% endblock %}
+    {% if current_user %}
+    <script>
+    (function(){
+        var input = document.getElementById('searchInput');
+        var box = document.getElementById('searchResults');
+        if(!input||!box) return;
+        var timer = null;
+        input.addEventListener('input', function(){
+            clearTimeout(timer);
+            var q = input.value.trim();
+            if(q.length < 2){ box.style.display='none'; return; }
+            timer = setTimeout(function(){
+                fetch('/api/search?q='+encodeURIComponent(q))
+                .then(function(r){return r.json()})
+                .then(function(data){
+                    if(!data.results||!data.results.length){
+                        box.innerHTML='<div style="padding:12px;color:#999;font-size:13px;">Ничего не найдено</div>';
+                        box.style.display='block'; return;
+                    }
+                    var html='';
+                    data.results.forEach(function(t){
+                        var bug=t.is_bug?'<span style="color:#c62828;font-size:11px;font-weight:600;">Баг</span> ':'';
+                        html+='<a href="/task/'+t.id+'" style="display:block;padding:8px 12px;text-decoration:none;color:inherit;border-bottom:1px solid #f0f0f0;transition:background 0.1s;"'
+                            +' onmouseover="this.style.background=\'#f5f5f5\'" onmouseout="this.style.background=\'#fff\'">'
+                            +'<div style="font-size:13px;font-weight:500;"><span style="color:#888;">#'+t.number+'</span> '+bug+t.title+'</div>'
+                            +'<div style="font-size:11px;color:#999;margin-top:2px;">P'+t.priority+' · '+t.status+' · '+t.assignee+' · '+t.project+'</div>'
+                            +'</a>';
+                    });
+                    box.innerHTML=html;
+                    box.style.display='block';
+                });
+            }, 300);
+        });
+        document.addEventListener('click', function(e){
+            if(!input.contains(e.target)&&!box.contains(e.target)) box.style.display='none';
+        });
+        input.addEventListener('keydown', function(e){
+            if(e.key==='Escape') box.style.display='none';
+        });
+    })();
+    </script>
+    {% endif %}
 </body>
 </html>

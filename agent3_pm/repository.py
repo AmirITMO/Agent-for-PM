@@ -214,11 +214,12 @@ async def get_task_by_id(session: AsyncSession, task_id: int) -> Task | None:
     return result.scalar_one_or_none()
 
 
-async def search_tasks_by_title(session: AsyncSession, query: str, limit: int = 10) -> list[Task]:
+async def search_tasks_by_title(session: AsyncSession, query: str, limit: int = 20) -> list[Task]:
     result = await session.execute(
         select(Task)
-        .options(selectinload(Task.assignee), selectinload(Task.project))
-        .where(Task.title.ilike(f"%{query}%"))
+        .options(selectinload(Task.assignee), selectinload(Task.project), selectinload(Task.comments))
+        .where(or_(Task.title.ilike(f"%{query}%"), Task.description.ilike(f"%{query}%")))
+        .where(Task.archived_at == None)  # noqa: E711
         .order_by(Task.updated_at.desc())
         .limit(limit)
     )
