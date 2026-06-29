@@ -52,42 +52,56 @@ def _gh_headers() -> dict:
 _approval_batches: dict[str, dict] = {}
 
 
-PARSE_PROMPT_CALLS = """Из текста созвона/записи извлеки ВСЕ задачи и поручения которые были упомянуты.
-Это могут быть как обычные задачи, так и баги.
+def _build_parse_prompt_calls(employees: str, projects: str) -> str:
+    return f"""Из текста созвона/записи извлеки ВСЕ задачи и поручения которые были упомянуты.
+
+СОТРУДНИКИ В СИСТЕМЕ: {employees}
+ПРОЕКТЫ (доски): {projects}
 
 Для каждой задачи верни JSON-объект:
-{
+{{
   "title": "краткое название",
   "description": "подробности — что нужно сделать, кому, когда, KPI",
-  "assignee_name": "кому назначено (если упомянуто)" или null,
+  "assignee_name": "ПОЛНОЕ имя из списка СОТРУДНИКОВ или null если не упомянут",
   "priority": 0-3 (0=срочно, 2=обычно),
-  "is_bug": true если это баг/ошибка/поломка, false если обычная задача,
+  "is_bug": true/false,
   "due_date": "YYYY-MM-DD" или null,
-  "project_name": null,
+  "project_name": "название из списка ПРОЕКТОВ или null",
   "status": null
-}
+}}
 
-Ответ — JSON. Формат: {"result": [задача1, задача2, ...]}
-Если задач нет — {"result": []}.
+ПРАВИЛА assignee_name:
+- Ищи имя в списке СОТРУДНИКОВ. «Руслан» = найди Руслана в списке, верни ПОЛНОЕ имя.
+- «Амир» = найди Амира в списке, верни полное имя (например «Амир Хайруллин»).
+- Если имя НЕ найдено в списке — assignee_name = null.
+- НЕ придумывай имена. ТОЛЬКО из списка.
+
+Ответ — JSON. Формат: {{"result": [задача1, задача2, ...]}}
+Если задач нет — {{"result": []}}.
 Извлекай ТОЛЬКО конкретные задачи/поручения, не общие обсуждения.
 НЕ придумывай задач — только из текста."""
 
-PARSE_PROMPT_BUGS = """Из текста извлеки ВСЕ баги и ошибки.
+
+def _build_parse_prompt_bugs(employees: str, projects: str) -> str:
+    return f"""Из текста извлеки ВСЕ баги и ошибки.
+
+СОТРУДНИКИ В СИСТЕМЕ: {employees}
+ПРОЕКТЫ (доски): {projects}
 
 Для каждого бага верни JSON-объект:
-{
+{{
   "title": "краткое название бага",
   "description": "что сломалось, как воспроизвести",
-  "assignee_name": null,
+  "assignee_name": "ПОЛНОЕ имя из списка СОТРУДНИКОВ или null",
   "priority": 0-1 (0=критичный, 1=важный),
   "is_bug": true,
   "due_date": null,
-  "project_name": null,
+  "project_name": "название из списка ПРОЕКТОВ или null",
   "status": null
-}
+}}
 
-Ответ — JSON. Формат: {"result": [баг1, баг2, ...]}
-Если багов нет — {"result": []}.
+Ответ — JSON. Формат: {{"result": [баг1, баг2, ...]}}
+Если багов нет — {{"result": []}}.
 Извлекай ТОЛЬКО баги/ошибки, не обычные задачи."""
 
 
@@ -294,6 +308,13 @@ async def check_kb_updates(bot):
 
     logger.info(f"KB watcher: {len(new_files)} new files from {len(commits)} commits")
 
+    # Load employees and projects from DB for GPT context
+    async with AsyncSessionLocal() as session:
+        all_users = await repo.get_all_users(session)
+        all_projects = await repo.get_all_projects(session)
+    employees_str = ", ".join(f"{u.name} ({u.position or '—'})" for u in all_users)
+    projects_str = ", ".join(p.name for p in all_projects)
+
     # Parse files
     all_tasks = []
     source_info = None
@@ -311,7 +332,10 @@ async def check_kb_updates(bot):
         if not source_info:
             source_info = info
 
-        prompt = PARSE_PROMPT_BUGS if "bugs" in f["folder"] else PARSE_PROMPT_CALLS
+        if "bugs" in f["folder"]:
+            prompt = _build_parse_prompt_bugs(employees_str, projects_str)
+        else:
+            prompt = _build_parse_prompt_calls(employees_str, projects_str)
         tasks = await _parse_tasks_from_content(content, f["filename"], prompt)
 
         if tasks is None:
@@ -397,6 +421,12 @@ async def handle_webhook_push(payload: dict, bot) -> dict:
     if not new_files:
         return {"status": "no_watched_files"}
 
+    async with AsyncSessionLocal() as session:
+        all_users = await repo.get_all_users(session)
+        all_projects = await repo.get_all_projects(session)
+    employees_str = ", ".join(f"{u.name} ({u.position or '—'})" for u in all_users)
+    projects_str = ", ".join(p.name for p in all_projects)
+
     all_tasks = []
     source_info = None
 
@@ -407,7 +437,10 @@ async def handle_webhook_push(payload: dict, bot) -> dict:
         info = _extract_source_info(content, f["filename"])
         if not source_info:
             source_info = info
-        prompt = PARSE_PROMPT_BUGS if "bugs" in f["folder"] else PARSE_PROMPT_CALLS
+        if "bugs" in f["folder"]:
+            prompt = _build_parse_prompt_bugs(employees_str, projects_str)
+        else:
+            prompt = _build_parse_prompt_calls(employees_str, projects_str)
         tasks = await _parse_tasks_from_content(content, f["filename"], prompt)
         if not tasks:
             continue
