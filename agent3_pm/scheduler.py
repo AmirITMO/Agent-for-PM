@@ -278,48 +278,85 @@ async def send_deadline_reminders(bot: Bot):
 
 
 async def send_evening_summary(bot: Bot):
-    """Send evening summary to Level 1 managers: completed today, WIP, approaching deadlines."""
+    """Send evening summary to Level 1: per-employee report of the day."""
     logger.info("Sending evening summaries")
     import datetime
+    today = datetime.date.today()
+
+    STATUS_LABELS = {
+        TaskStatus.BACKLOG: "Бэклог", TaskStatus.PLANNING: "Планирование",
+        TaskStatus.TODO: "К выполнению", TaskStatus.WIP: "В работе",
+        TaskStatus.DONE: "Готово", TaskStatus.APPROVED: "Принято",
+        TaskStatus.HOLD: "На паузе",
+    }
+
     async with AsyncSessionLocal() as session:
         all_users = await repo.get_all_users(session)
         managers = await repo.get_managers(session)
-        base = config.WEB_BASE_URL.rstrip("/")
 
-        users_data = []
-        for user in all_users:
-            completed = await repo.get_tasks_completed_today(session, user_id=user.id)
-            wip_tasks = await repo.get_all_tasks(session, assignee_id=user.id, status=TaskStatus.WIP)
-            hot_tasks = await repo.get_hot_tasks(session, config.DEADLINE_WARNING_HOURS, user_id=user.id)
+        blocks = [f"<b>Вечерняя сводка — {today.strftime('%d.%m.%Y')}</b>\n"]
 
-            if not completed and not wip_tasks and not hot_tasks:
+        for u in sorted(all_users, key=lambda x: x.name):
+            completed = await repo.get_tasks_completed_today(session, user_id=u.id)
+            all_tasks = await repo.get_all_tasks(session, assignee_id=u.id)
+            active = [t for t in all_tasks if not t.archived_at and t.status in ACTIVE_STATUSES]
+
+            if not completed and not active:
                 continue
 
-            def _task_dict(t):
-                return {
-                    "id": t.id,
-                    "display_number": t.display_number,
-                    "title": t.title,
-                    "due_date": t.due_date.strftime("%d.%m.%Y") if t.due_date else "",
-                }
+            lines = [f"\n<b>{u.name}</b> ({u.position or '—'})"]
 
-            users_data.append({
-                "name": user.name,
-                "completed": [_task_dict(t) for t in completed],
-                "wip": [_task_dict(t) for t in wip_tasks],
-                "approaching": [_task_dict(t) for t in hot_tasks],
-            })
+            if completed:
+                lines.append(f"  <b>Выполнено сегодня ({len(completed)}):</b>")
+                for t in completed:
+                    dn = t.display_number or t.id
+                    lines.append(f"    #{dn} {t.title}")
 
-        text = format_evening_summary(users_data, base)
+            wip = [t for t in active if t.status == TaskStatus.WIP]
+            if wip:
+                lines.append(f"  <b>В работе ({len(wip)}):</b>")
+                for t in wip:
+                    dn = t.display_number or t.id
+                    dd = f" — до {t.due_date.strftime('%d.%m')}" if t.due_date else ""
+                    lines.append(f"    #{dn} {t.title}{dd}")
+
+            todo = [t for t in active if t.status in (TaskStatus.TODO, TaskStatus.BACKLOG, TaskStatus.PLANNING)]
+            if todo:
+                lines.append(f"  <b>Ожидает ({len(todo)}):</b>")
+                for t in todo:
+                    dn = t.display_number or t.id
+                    lines.append(f"    #{dn} {t.title}")
+
+            if not completed and not wip and not todo:
+                lines.append("  Нет активности за сегодня")
+
+            blocks.append("\n".join(lines))
+
+        if len(blocks) <= 1:
+            blocks.append("\nНет данных по сотрудникам.")
+
+        # Send to managers — split by Telegram limit
         for manager in managers:
             if not manager.telegram_id:
                 continue
-            try:
-                await bot.send_message(chat_id=manager.telegram_id, text=text,
-                                       parse_mode="HTML", disable_web_page_preview=True)
-                logger.info(f"Evening summary sent to {manager.name}")
-            except Exception:
-                logger.exception(f"Failed to send evening summary to {manager.name}")
+            chunk, size = [], 0
+            for b in blocks:
+                if size + len(b) > 3500 and chunk:
+                    try:
+                        await bot.send_message(chat_id=manager.telegram_id, text="\n".join(chunk),
+                                               parse_mode="HTML", disable_web_page_preview=True)
+                    except Exception:
+                        logger.exception(f"Failed evening chunk to {manager.name}")
+                    chunk, size = [], 0
+                chunk.append(b)
+                size += len(b) + 2
+            if chunk:
+                try:
+                    await bot.send_message(chat_id=manager.telegram_id, text="\n".join(chunk),
+                                           parse_mode="HTML", disable_web_page_preview=True)
+                    logger.info(f"Evening summary sent to {manager.name}")
+                except Exception:
+                    logger.exception(f"Failed evening summary to {manager.name}")
 
 
 async def archive_tasks():
@@ -396,6 +433,44 @@ def create_scheduler(bot: Bot) -> AsyncIOScheduler:
         trigger=CronTrigger(hour=3, minute=0, timezone=tz),
         id="archive_tasks",
         name="Archive Old Tasks",
+        replace_existing=True,
+    )
+
+    async def sync_settings_to_scheduler():
+        """Re-read settings from DB and update scheduler job times."""
+        try:
+            async with AsyncSessionLocal() as session:
+                settings = await repo.get_all_settings(session)
+            m_hour = int(settings.get("morning_summary_hour", "9"))
+            m_min = int(settings.get("morning_summary_minute", "0"))
+            e_hour = int(settings.get("evening_summary_hour", "19"))
+            e_min = int(settings.get("evening_summary_minute", "0"))
+            tz_name = settings.get("timezone", "Europe/Moscow")
+            stz = ZoneInfo(tz_name)
+
+            job_m = scheduler.get_job("morning_summary")
+            if job_m:
+                cur = job_m.trigger
+                if cur.fields[5].expressions[0].first != m_hour or cur.fields[6].expressions[0].first != m_min:
+                    scheduler.reschedule_job("morning_summary",
+                        trigger=CronTrigger(hour=m_hour, minute=m_min, timezone=stz))
+                    logger.info(f"Morning summary rescheduled to {m_hour}:{m_min:02d}")
+
+            job_e = scheduler.get_job("evening_summary")
+            if job_e:
+                cur = job_e.trigger
+                if cur.fields[5].expressions[0].first != e_hour or cur.fields[6].expressions[0].first != e_min:
+                    scheduler.reschedule_job("evening_summary",
+                        trigger=CronTrigger(hour=e_hour, minute=e_min, timezone=stz))
+                    logger.info(f"Evening summary rescheduled to {e_hour}:{e_min:02d}")
+        except Exception:
+            logger.exception("Failed to sync settings to scheduler")
+
+    scheduler.add_job(
+        sync_settings_to_scheduler,
+        trigger=IntervalTrigger(minutes=5),
+        id="sync_settings",
+        name="Sync Settings",
         replace_existing=True,
     )
 
