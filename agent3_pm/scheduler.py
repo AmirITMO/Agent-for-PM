@@ -12,8 +12,8 @@ from telegram import Bot
 from agent3_pm.config import config
 from agent3_pm.database import AsyncSessionLocal
 from agent3_pm import repository as repo
-from agent3_pm.formatter import format_morning_summary, format_deadline_warning
-from agent3_pm.models import ACTIVE_STATUSES
+from agent3_pm.formatter import format_morning_summary, format_deadline_warning, format_evening_summary
+from agent3_pm.models import ACTIVE_STATUSES, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +212,51 @@ async def send_deadline_reminders(bot: Bot):
                 logger.exception(f"Failed reminder to {user.name}")
 
 
+async def send_evening_summary(bot: Bot):
+    """Send evening summary to Level 1 managers: completed today, WIP, approaching deadlines."""
+    logger.info("Sending evening summaries")
+    import datetime
+    async with AsyncSessionLocal() as session:
+        all_users = await repo.get_all_users(session)
+        managers = await repo.get_managers(session)
+        base = config.WEB_BASE_URL.rstrip("/")
+
+        users_data = []
+        for user in all_users:
+            completed = await repo.get_tasks_completed_today(session, user_id=user.id)
+            wip_tasks = await repo.get_all_tasks(session, assignee_id=user.id, status=TaskStatus.WIP)
+            hot_tasks = await repo.get_hot_tasks(session, config.DEADLINE_WARNING_HOURS, user_id=user.id)
+
+            if not completed and not wip_tasks and not hot_tasks:
+                continue
+
+            def _task_dict(t):
+                return {
+                    "id": t.id,
+                    "display_number": t.display_number,
+                    "title": t.title,
+                    "due_date": t.due_date.strftime("%d.%m.%Y") if t.due_date else "",
+                }
+
+            users_data.append({
+                "name": user.name,
+                "completed": [_task_dict(t) for t in completed],
+                "wip": [_task_dict(t) for t in wip_tasks],
+                "approaching": [_task_dict(t) for t in hot_tasks],
+            })
+
+        text = format_evening_summary(users_data, base)
+        for manager in managers:
+            if not manager.telegram_id:
+                continue
+            try:
+                await bot.send_message(chat_id=manager.telegram_id, text=text,
+                                       parse_mode="HTML", disable_web_page_preview=True)
+                logger.info(f"Evening summary sent to {manager.name}")
+            except Exception:
+                logger.exception(f"Failed to send evening summary to {manager.name}")
+
+
 async def archive_tasks():
     logger.info("Running task archiver")
     async with AsyncSessionLocal() as session:
@@ -234,6 +279,19 @@ def create_scheduler(bot: Bot) -> AsyncIOScheduler:
         args=[bot],
         id="morning_summary",
         name="Morning Summary",
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        send_evening_summary,
+        trigger=CronTrigger(
+            hour=config.EVENING_SUMMARY_HOUR,
+            minute=config.EVENING_SUMMARY_MINUTE,
+            timezone=tz,
+        ),
+        args=[bot],
+        id="evening_summary",
+        name="Evening Summary",
         replace_existing=True,
     )
 

@@ -41,6 +41,9 @@
                     <a href="javascript:void(0)" onclick="if(confirm('Заблокировать {{ u.name|e }}? Задачи будут архивированы.')" style="color:#c62828; text-decoration:none; font-size:12px;" id="dellink_{{ u.id }}">Заблокировать</a>
                     <form id="del_{{ u.id }}" method="post" action="/api/users/{{ u.id }}/delete" style="display:none;"></form>
                     <script>document.getElementById('dellink_{{ u.id }}').onclick=function(){if(confirm('Заблокировать {{ u.name|e }}? Задачи будут архивированы.'))document.getElementById('del_{{ u.id }}').submit()}</script>
+                    <a href="javascript:void(0)" id="harddellink_{{ u.id }}" style="color:#b71c1c; text-decoration:none; font-size:12px; margin-left:8px; font-weight:600;">Удалить навсегда</a>
+                    <form id="harddel_{{ u.id }}" method="post" action="/api/users/{{ u.id }}/hard-delete" style="display:none;"></form>
+                    <script>document.getElementById('harddellink_{{ u.id }}').onclick=function(){if(confirm('УДАЛИТЬ НАВСЕГДА {{ u.name|e }}? Это действие необратимо!'))document.getElementById('harddel_{{ u.id }}').submit()}</script>
                     {% else %}
                     {% if can_manage %}
                     <a href="javascript:void(0)" onclick="if(confirm('Восстановить {{ u.name|e }}?')) document.getElementById('restore_{{ u.id }}').submit()" style="color:#2e7d32; text-decoration:none; font-size:12px;">Восстановить</a>

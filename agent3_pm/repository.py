@@ -121,6 +121,29 @@ async def delete_user(session: AsyncSession, user_id: int) -> bool:
     return True
 
 
+async def hard_delete_user(session: AsyncSession, user_id: int) -> bool:
+    """Hard delete: completely remove user, unassign tasks, delete notification logs."""
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        return False
+    # Unassign tasks
+    tasks = await get_all_tasks(session, assignee_id=user_id, include_archived=True)
+    for t in tasks:
+        t.assignee_id = None
+    # Delete notification logs
+    await session.execute(
+        delete(NotificationLog).where(NotificationLog.user_id == user_id)
+    )
+    # Remove board memberships
+    await session.execute(
+        delete(board_members).where(board_members.c.user_id == user_id)
+    )
+    # Delete user
+    await session.delete(user)
+    await session.commit()
+    return True
+
+
 async def restore_user(session: AsyncSession, user_id: int) -> User | None:
     """Restore soft-deleted user (unarchive tasks stays manual)."""
     user = await get_user_by_id(session, user_id)
@@ -529,6 +552,24 @@ async def was_notified_today(session: AsyncSession, user_id: int, task_id: int,
         )
     )
     return (result.scalar() or 0) > 0
+
+
+async def get_tasks_completed_today(session: AsyncSession, user_id: int | None = None) -> list[Task]:
+    """Tasks where status is done/approved AND updated_at >= today start."""
+    today_start = datetime.datetime.combine(datetime.date.today(), datetime.time.min)
+    q = (
+        select(Task)
+        .options(selectinload(Task.assignee), selectinload(Task.project))
+        .where(
+            Task.status.in_([TaskStatus.DONE.value, TaskStatus.APPROVED.value]),
+            Task.updated_at >= today_start,
+        )
+        .order_by(Task.updated_at.desc())
+    )
+    if user_id is not None:
+        q = q.where(Task.assignee_id == user_id)
+    result = await session.execute(q)
+    return list(result.scalars().all())
 
 
 # ── Settings ──

@@ -27,6 +27,8 @@ class Config:
     # Notifications
     MORNING_SUMMARY_HOUR: int = int(os.getenv("MORNING_SUMMARY_HOUR", "9"))
     MORNING_SUMMARY_MINUTE: int = int(os.getenv("MORNING_SUMMARY_MINUTE", "0"))
+    EVENING_SUMMARY_HOUR: int = int(os.getenv("EVENING_SUMMARY_HOUR", "19"))
+    EVENING_SUMMARY_MINUTE: int = int(os.getenv("EVENING_SUMMARY_MINUTE", "0"))
     DEADLINE_CHECK_INTERVAL_MINUTES: int = int(os.getenv("DEADLINE_CHECK_INTERVAL_MINUTES", "30"))
     DEADLINE_WARNING_HOURS: int = int(os.getenv("DEADLINE_WARNING_HOURS", "24"))
 

@@ -160,6 +160,49 @@ def format_morning_summary(summary: dict, web_url: str = "") -> str:
     return "\n".join(lines)
 
 
+def format_evening_summary(users_data: list[dict], base_url: str) -> str:
+    """Format evening summary for Level 1 managers.
+
+    users_data: list of dicts with keys: name, completed, wip, approaching
+    Each task item has: id, display_number, title
+    """
+    today = datetime.date.today()
+    lines = [f"<b>Вечерняя сводка — {today.strftime('%d.%m.%Y')}</b>\n"]
+
+    if not users_data:
+        lines.append("Нет данных по сотрудникам.")
+        return "\n".join(lines)
+
+    for ud in users_data:
+        name = ud["name"]
+        completed = ud.get("completed", [])
+        wip = ud.get("wip", [])
+        approaching = ud.get("approaching", [])
+
+        if not completed and not wip and not approaching:
+            continue
+
+        lines.append(f"\n<b>{name}</b>")
+        if completed:
+            lines.append(f"  Выполнено сегодня ({len(completed)}):")
+            for t in completed:
+                dn = t.get("display_number") or t["id"]
+                lines.append(f'  #{dn} {t["title"]} <a href="{base_url}/task/{t["id"]}">открыть</a>')
+        if wip:
+            lines.append(f"  В работе ({len(wip)}):")
+            for t in wip:
+                dn = t.get("display_number") or t["id"]
+                lines.append(f'  #{dn} {t["title"]} <a href="{base_url}/task/{t["id"]}">открыть</a>')
+        if approaching:
+            lines.append(f"  Приближаются дедлайны ({len(approaching)}):")
+            for t in approaching:
+                dn = t.get("display_number") or t["id"]
+                dd = t.get("due_date", "")
+                lines.append(f'  #{dn} {t["title"]} — {dd} <a href="{base_url}/task/{t["id"]}">открыть</a>')
+
+    return "\n".join(lines)
+
+
 def format_deadline_warning(task: Task) -> str:
     days_left = (task.due_date - datetime.date.today()).days if task.due_date else None
     if days_left is None:

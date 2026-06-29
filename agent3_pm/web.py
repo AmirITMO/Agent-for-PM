@@ -449,6 +449,15 @@ async def restore_user_api(user_id: int, request: Request,
     return RedirectResponse("/employees", status_code=303)
 
 
+@app.post("/api/users/{user_id}/hard-delete", response_class=RedirectResponse)
+async def hard_delete_user_api(user_id: int, request: Request,
+                               session: AsyncSession = Depends(get_session)):
+    if not _can_manage(await _current_user(request, session)):
+        raise HTTPException(403, "Недостаточно прав")
+    await repo.hard_delete_user(session, user_id)
+    return RedirectResponse("/employees", status_code=303)
+
+
 @app.post("/api/users/{user_id}/reset-password", response_class=RedirectResponse)
 async def reset_password_api(user_id: int, request: Request,
                              session: AsyncSession = Depends(get_session)):
@@ -861,8 +870,18 @@ async def update_settings_api(request: Request, session: AsyncSession = Depends(
     if not _can_manage(current):
         return RedirectResponse("/board", status_code=303)
     form = await request.form()
-    from agent3_pm.models import Settings
-    for key in Settings.LABELS:
+    # Parse time inputs (HH:MM) into hour/minute settings
+    morning_time = (form.get("morning_time") or "").strip()
+    if morning_time:
+        parts = morning_time.split(":")
+        await repo.set_setting(session, "morning_summary_hour", parts[0].lstrip("0") or "0")
+        await repo.set_setting(session, "morning_summary_minute", parts[1].lstrip("0") or "0")
+    evening_time = (form.get("evening_time") or "").strip()
+    if evening_time:
+        parts = evening_time.split(":")
+        await repo.set_setting(session, "evening_summary_hour", parts[0].lstrip("0") or "0")
+        await repo.set_setting(session, "evening_summary_minute", parts[1].lstrip("0") or "0")
+    for key in ("deadline_check_interval_minutes", "deadline_warning_hours", "timezone"):
         val = form.get(key)
         if val is not None:
             await repo.set_setting(session, key, str(val).strip())

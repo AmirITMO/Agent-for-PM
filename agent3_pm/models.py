@@ -203,14 +203,18 @@ class Settings(Base):
     DEFAULTS = {
         "morning_summary_hour": "9",
         "morning_summary_minute": "0",
+        "evening_summary_hour": "19",
+        "evening_summary_minute": "0",
         "deadline_check_interval_minutes": "30",
         "deadline_warning_hours": "24",
         "timezone": "Europe/Moscow",
     }
 
     LABELS = {
-        "morning_summary_hour": "Час утренней сводки (0-23)",
+        "morning_summary_hour": "Утренняя сводка",
         "morning_summary_minute": "Минута утренней сводки (0-59)",
+        "evening_summary_hour": "Вечерняя сводка",
+        "evening_summary_minute": "Минута вечерней сводки (0-59)",
         "deadline_check_interval_minutes": "Проверка дедлайнов (мин)",
         "deadline_warning_hours": "Предупреждать за (часов)",
         "timezone": "Часовой пояс",
