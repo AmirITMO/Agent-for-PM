@@ -33,53 +33,118 @@ def _enter_link(user_id: int, path: str, label: str = "ссылка") -> str:
 
 
 async def send_morning_summary(bot: Bot):
-    """Send morning summary: full report to Level 1, personal to everyone."""
+    """Send morning summary: detailed per-employee report to Level 1, personal to everyone."""
     logger.info("Sending morning summaries")
+    import datetime
+    today = datetime.date.today()
+
     async with AsyncSessionLocal() as session:
         all_users = await repo.get_all_users(session)
         managers = await repo.get_managers(session)
-        summary = await repo.get_team_summary(session)
         base = config.WEB_BASE_URL.rstrip("/")
 
-        # Level 1 — full team summary
-        full_text = format_morning_summary(summary, base)
+        STATUS_LABELS = {
+            TaskStatus.BACKLOG: "Бэклог", TaskStatus.PLANNING: "Планирование",
+            TaskStatus.TODO: "К выполнению", TaskStatus.WIP: "В работе",
+            TaskStatus.DONE: "Готово", TaskStatus.APPROVED: "Принято",
+            TaskStatus.HOLD: "На паузе",
+        }
+
+        # Build detailed report for Level 1
+        overdue_all = await repo.get_overdue_tasks(session)
+        hot_all = await repo.get_hot_tasks(session, config.DEADLINE_WARNING_HOURS)
+
+        header = [f"<b>Утренняя сводка — {today.strftime('%d.%m.%Y')}</b>\n"]
+        if overdue_all:
+            header.append(f"<b>Просрочки ({len(overdue_all)}):</b>")
+            for t in overdue_all[:10]:
+                days = (today - t.due_date).days if t.due_date else 0
+                who = t.assignee.name if t.assignee else "не назначен"
+                dn = t.display_number or t.id
+                header.append(f"  #{dn} {t.title} — {who} — {days} дн.")
+        if hot_all:
+            header.append(f"\n<b>Горящие дедлайны ({len(hot_all)}):</b>")
+            for t in hot_all[:10]:
+                who = t.assignee.name if t.assignee else "не назначен"
+                dd = t.due_date.strftime('%d.%m') if t.due_date else ""
+                dn = t.display_number or t.id
+                header.append(f"  #{dn} {t.title} — {who} — {dd}")
+
+        blocks = ["\n".join(header)]
+
+        for u in sorted(all_users, key=lambda x: x.name):
+            tasks = await repo.get_all_tasks(session, assignee_id=u.id)
+            active = [t for t in tasks if not t.archived_at and t.status in ACTIVE_STATUSES]
+            if not active:
+                continue
+
+            by_status = {}
+            for t in active:
+                sl = STATUS_LABELS.get(t.status, str(t.status))
+                by_status.setdefault(sl, []).append(t)
+
+            overdue_count = sum(1 for t in active if t.is_overdue)
+            lines = [f"\n<b>{u.name}</b> ({u.position or '—'}) — {len(active)} задач" +
+                     (f", просрочено: {overdue_count}" if overdue_count else "")]
+
+            for status_label, status_tasks in by_status.items():
+                lines.append(f"  <b>{status_label}:</b>")
+                for t in status_tasks:
+                    dn = t.display_number or t.id
+                    bug = "[Баг] " if t.is_bug else ""
+                    overdue_mark = " ⚠️" if t.is_overdue else ""
+                    dd = f" — до {t.due_date.strftime('%d.%m')}" if t.due_date else ""
+                    lines.append(f"    #{dn} {bug}P{t.priority} {t.title}{dd}{overdue_mark}")
+
+            blocks.append("\n".join(lines))
+
+        # Send to Level 1 — split by 4000 chars
         for manager in managers:
             if not manager.telegram_id:
                 continue
-            try:
-                await bot.send_message(chat_id=manager.telegram_id, text=full_text,
-                                       parse_mode="HTML", disable_web_page_preview=True)
-                logger.info(f"Full summary sent to {manager.name}")
-            except Exception:
-                logger.exception(f"Failed to send summary to {manager.name}")
+            chunk, size = [], 0
+            for b in blocks:
+                if size + len(b) > 3500 and chunk:
+                    try:
+                        await bot.send_message(chat_id=manager.telegram_id, text="\n".join(chunk),
+                                               parse_mode="HTML", disable_web_page_preview=True)
+                    except Exception:
+                        logger.exception(f"Failed to send summary chunk to {manager.name}")
+                    chunk, size = [], 0
+                chunk.append(b)
+                size += len(b) + 2
+            if chunk:
+                try:
+                    await bot.send_message(chat_id=manager.telegram_id, text="\n".join(chunk),
+                                           parse_mode="HTML", disable_web_page_preview=True)
+                    logger.info(f"Full summary sent to {manager.name}")
+                except Exception:
+                    logger.exception(f"Failed to send summary to {manager.name}")
 
-        # Everyone with telegram — personal report
+        # Everyone — personal report
         for user in all_users:
             if not user.telegram_id:
                 continue
             my_tasks = await repo.get_all_tasks(session, assignee_id=user.id)
-            active = [t for t in my_tasks if t.status in ACTIVE_STATUSES]
+            active = [t for t in my_tasks if not t.archived_at and t.status in ACTIVE_STATUSES]
             if not active:
                 continue
 
-            overdue = await repo.get_overdue_tasks(session, user_id=user.id)
-            hot = await repo.get_hot_tasks(session, config.DEADLINE_WARNING_HOURS, user_id=user.id)
-
-            lines = [f"<b>Отчет по твоим задачам:</b>\n"]
+            overdue = [t for t in active if t.is_overdue]
+            lines = [f"<b>Твои задачи на сегодня ({len(active)}):</b>\n"]
             if overdue:
-                lines.append(f"<b>Просрочки ({len(overdue)}):</b>")
+                lines.append(f"<b>Просрочено ({len(overdue)}):</b>")
                 for t in overdue:
-                    lines.append(f'  {t.title} — {t.due_date.strftime("%d.%m.%Y")} {_enter_link(user.id, f"/task/{t.id}")}')
-            else:
-                lines.append("Просрочки — нет")
-            lines.append("")
-            if hot:
-                lines.append(f"<b>Дедлайны скоро ({len(hot)}):</b>")
-                for t in hot:
-                    dd = t.due_date.strftime('%d.%m.%Y') if t.due_date else ""
-                    lines.append(f'  {t.title} — {dd} {_enter_link(user.id, f"/task/{t.id}")}')
-            else:
-                lines.append("Ближайших дедлайнов нет")
+                    dn = t.display_number or t.id
+                    lines.append(f'  #{dn} {t.title} — {t.due_date.strftime("%d.%m.%Y")} {_enter_link(user.id, f"/task/{t.id}")}')
+                lines.append("")
+
+            for t in active:
+                if t not in overdue:
+                    dn = t.display_number or t.id
+                    sl = STATUS_LABELS.get(t.status, "")
+                    dd = f" — до {t.due_date.strftime('%d.%m')}" if t.due_date else ""
+                    lines.append(f'  #{dn} {t.title} — {sl}{dd} {_enter_link(user.id, f"/task/{t.id}")}')
 
             text = "\n".join(lines)
             try:
